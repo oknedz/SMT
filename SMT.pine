@@ -76,77 +76,17 @@ var array<CycleData> prevCycles3 = array.new<CycleData>()
 
 var int currentDay = na
 
-// Active line/label tracking arrays - storing multiple SMT lines per type
-// Type 0: S1 Bearish, 1: S1 Bullish, 2: S2 Bearish, 3: S2 Bullish, 4: S1 Inv Bearish, 5: S1 Inv Bullish, 6: S2 Inv Bearish, 7: S2 Inv Bullish
-var array<line> lineHistory90_0 = array.new<line>(0)
-var array<label> labelHistory90_0 = array.new<label>(0)
-var array<line> lineHistory90_1 = array.new<line>(0)
-var array<label> labelHistory90_1 = array.new<label>(0)
-var array<line> lineHistory90_2 = array.new<line>(0)
-var array<label> labelHistory90_2 = array.new<label>(0)
-var array<line> lineHistory90_3 = array.new<line>(0)
-var array<label> labelHistory90_3 = array.new<label>(0)
-var array<line> lineHistory90_4 = array.new<line>(0)
-var array<label> labelHistory90_4 = array.new<label>(0)
-var array<line> lineHistory90_5 = array.new<line>(0)
-var array<label> labelHistory90_5 = array.new<label>(0)
-var array<line> lineHistory90_6 = array.new<line>(0)
-var array<label> labelHistory90_6 = array.new<label>(0)
-var array<line> lineHistory90_7 = array.new<line>(0)
-var array<label> labelHistory90_7 = array.new<label>(0)
+// Type to track line metadata
+type LineMetadata
+    line lineObj
+    label labelObj
+    bool isBearish
+    float length
 
-var array<line> lineHistory30_0 = array.new<line>(0)
-var array<label> labelHistory30_0 = array.new<label>(0)
-var array<line> lineHistory30_1 = array.new<line>(0)
-var array<label> labelHistory30_1 = array.new<label>(0)
-var array<line> lineHistory30_2 = array.new<line>(0)
-var array<label> labelHistory30_2 = array.new<label>(0)
-var array<line> lineHistory30_3 = array.new<line>(0)
-var array<label> labelHistory30_3 = array.new<label>(0)
-var array<line> lineHistory30_4 = array.new<line>(0)
-var array<label> labelHistory30_4 = array.new<label>(0)
-var array<line> lineHistory30_5 = array.new<line>(0)
-var array<label> labelHistory30_5 = array.new<label>(0)
-var array<line> lineHistory30_6 = array.new<line>(0)
-var array<label> labelHistory30_6 = array.new<label>(0)
-var array<line> lineHistory30_7 = array.new<line>(0)
-var array<label> labelHistory30_7 = array.new<label>(0)
+// Global line/label tracking - all SMT lines across all cycles
+var array<LineMetadata> globalLineHistory = array.new<LineMetadata>(0)
 
-var array<line> lineHistory10_0 = array.new<line>(0)
-var array<label> labelHistory10_0 = array.new<label>(0)
-var array<line> lineHistory10_1 = array.new<line>(0)
-var array<label> labelHistory10_1 = array.new<label>(0)
-var array<line> lineHistory10_2 = array.new<line>(0)
-var array<label> labelHistory10_2 = array.new<label>(0)
-var array<line> lineHistory10_3 = array.new<line>(0)
-var array<label> labelHistory10_3 = array.new<label>(0)
-var array<line> lineHistory10_4 = array.new<line>(0)
-var array<label> labelHistory10_4 = array.new<label>(0)
-var array<line> lineHistory10_5 = array.new<line>(0)
-var array<label> labelHistory10_5 = array.new<label>(0)
-var array<line> lineHistory10_6 = array.new<line>(0)
-var array<label> labelHistory10_6 = array.new<label>(0)
-var array<line> lineHistory10_7 = array.new<line>(0)
-var array<label> labelHistory10_7 = array.new<label>(0)
-
-var array<line> lineHistory3_0 = array.new<line>(0)
-var array<label> labelHistory3_0 = array.new<label>(0)
-var array<line> lineHistory3_1 = array.new<line>(0)
-var array<label> labelHistory3_1 = array.new<label>(0)
-var array<line> lineHistory3_2 = array.new<line>(0)
-var array<label> labelHistory3_2 = array.new<label>(0)
-var array<line> lineHistory3_3 = array.new<line>(0)
-var array<label> labelHistory3_3 = array.new<label>(0)
-var array<line> lineHistory3_4 = array.new<line>(0)
-var array<label> labelHistory3_4 = array.new<label>(0)
-var array<line> lineHistory3_5 = array.new<line>(0)
-var array<label> labelHistory3_5 = array.new<label>(0)
-var array<line> lineHistory3_6 = array.new<line>(0)
-var array<label> labelHistory3_6 = array.new<label>(0)
-var array<line> lineHistory3_7 = array.new<line>(0)
-var array<label> labelHistory3_7 = array.new<label>(0)
-
-int MAX_LINES_PER_TYPE = 4
+int MAX_TOTAL_LINES = 4
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              CORE FUNCTIONS
@@ -213,33 +153,60 @@ detectBearishInverseSMT(mainCurr, mainPrev, compCurr, compPrev) =>
 detectBullishInverseSMT(mainCurr, mainPrev, compCurr, compPrev) =>
     not na(mainCurr) and not na(mainPrev) and not na(compCurr) and not na(compPrev) and compCurr < compPrev and mainCurr > mainPrev
 
-drawOrUpdateSMT(mainBar, mainPrice, compBar, compPrice, labelText, lineArray, labelArray, isBearish) =>
+drawOrUpdateSMT(mainBar, mainPrice, compBar, compPrice, labelText, isBearish) =>
     line newLine = na
     label newLabel = na
     if not na(mainBar) and not na(compBar)
-        newLine := line.new(mainBar, mainPrice, compBar, compPrice, color=color.black, width=1, style=line.style_solid)
+        // Calculate line length (Euclidean distance)
+        barDiff = math.abs(compBar - mainBar)
+        priceDiff = math.abs(compPrice - mainPrice)
+        newLength = math.sqrt(barDiff * barDiff + priceDiff * priceDiff)
         
-        // Position label on the right side of the line (rightmost bar)
-        labelBar = math.max(mainBar, compBar)
-        labelPrice = mainBar > compBar ? mainPrice : compPrice
+        // Check if there's an existing line in the same direction
+        int indexToRemove = -1
+        bool shouldAddLine = true
+        if array.size(globalLineHistory) > 0
+            for i = 0 to array.size(globalLineHistory) - 1
+                metadata = array.get(globalLineHistory, i)
+                if metadata.isBearish == isBearish
+                    // Found a line in same direction, compare lengths
+                    if metadata.length < newLength
+                        // Existing line is shorter, mark for removal
+                        indexToRemove := i
+                    else
+                        // Existing line is longer, don't add new line
+                        shouldAddLine := false
         
-        // Position text above price for bearish, below price for bullish
-        textYloc = isBearish ? yloc.abovebar : yloc.belowbar
-        
-        newLabel := label.new(labelBar, labelPrice, labelText, style=label.style_none, color=color.black, textcolor=color.black, size=size.small, yloc=textYloc, xloc=xloc.bar_index)
-        
-        // Add to history
-        array.push(lineArray, newLine)
-        array.push(labelArray, newLabel)
-        
-        // Remove oldest if exceeds limit
-        if array.size(lineArray) > MAX_LINES_PER_TYPE
-            oldLine = array.shift(lineArray)
-            oldLabel = array.shift(labelArray)
-            if not na(oldLine)
-                line.delete(oldLine)
-            if not na(oldLabel)
-                label.delete(oldLabel)
+        if shouldAddLine
+            // Remove the shorter line if found
+            if indexToRemove >= 0
+                oldMetadata = array.remove(globalLineHistory, indexToRemove)
+                line.delete(oldMetadata.lineObj)
+                label.delete(oldMetadata.labelObj)
+            
+            // Create new line and label
+            newLine := line.new(mainBar, mainPrice, compBar, compPrice, color=color.black, width=1, style=line.style_solid)
+            
+            // Position label on the right side of the line (rightmost bar)
+            labelBar = math.max(mainBar, compBar)
+            labelPrice = mainBar > compBar ? mainPrice : compPrice
+            
+            // Position text above price for bearish, below price for bullish
+            textYloc = isBearish ? yloc.abovebar : yloc.belowbar
+            
+            newLabel := label.new(labelBar, labelPrice, labelText, style=label.style_none, color=color.black, textcolor=color.black, size=size.small, yloc=textYloc, xloc=xloc.bar_index)
+            
+            // Create metadata and add to global history
+            metadata = LineMetadata.new(newLine, newLabel, isBearish, newLength)
+            array.push(globalLineHistory, metadata)
+            
+            // Remove oldest if exceeds global limit
+            if array.size(globalLineHistory) > MAX_TOTAL_LINES
+                oldMetadata = array.shift(globalLineHistory)
+                if not na(oldMetadata.lineObj)
+                    line.delete(oldMetadata.lineObj)
+                if not na(oldMetadata.labelObj)
+                    label.delete(oldMetadata.labelObj)
     [newLine, newLabel]
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -258,109 +225,11 @@ if newDay and not na(time[1])
     cycle10.active := false
     cycle3.active := false
     
-    // Clear all line and label history for 90-min cycle
-    while array.size(lineHistory90_0) > 0
-        line.delete(array.shift(lineHistory90_0))
-        label.delete(array.shift(labelHistory90_0))
-    while array.size(lineHistory90_1) > 0
-        line.delete(array.shift(lineHistory90_1))
-        label.delete(array.shift(labelHistory90_1))
-    while array.size(lineHistory90_2) > 0
-        line.delete(array.shift(lineHistory90_2))
-        label.delete(array.shift(labelHistory90_2))
-    while array.size(lineHistory90_3) > 0
-        line.delete(array.shift(lineHistory90_3))
-        label.delete(array.shift(labelHistory90_3))
-    while array.size(lineHistory90_4) > 0
-        line.delete(array.shift(lineHistory90_4))
-        label.delete(array.shift(labelHistory90_4))
-    while array.size(lineHistory90_5) > 0
-        line.delete(array.shift(lineHistory90_5))
-        label.delete(array.shift(labelHistory90_5))
-    while array.size(lineHistory90_6) > 0
-        line.delete(array.shift(lineHistory90_6))
-        label.delete(array.shift(labelHistory90_6))
-    while array.size(lineHistory90_7) > 0
-        line.delete(array.shift(lineHistory90_7))
-        label.delete(array.shift(labelHistory90_7))
-    
-    // Clear all line and label history for 30-min cycle
-    while array.size(lineHistory30_0) > 0
-        line.delete(array.shift(lineHistory30_0))
-        label.delete(array.shift(labelHistory30_0))
-    while array.size(lineHistory30_1) > 0
-        line.delete(array.shift(lineHistory30_1))
-        label.delete(array.shift(labelHistory30_1))
-    while array.size(lineHistory30_2) > 0
-        line.delete(array.shift(lineHistory30_2))
-        label.delete(array.shift(labelHistory30_2))
-    while array.size(lineHistory30_3) > 0
-        line.delete(array.shift(lineHistory30_3))
-        label.delete(array.shift(labelHistory30_3))
-    while array.size(lineHistory30_4) > 0
-        line.delete(array.shift(lineHistory30_4))
-        label.delete(array.shift(labelHistory30_4))
-    while array.size(lineHistory30_5) > 0
-        line.delete(array.shift(lineHistory30_5))
-        label.delete(array.shift(labelHistory30_5))
-    while array.size(lineHistory30_6) > 0
-        line.delete(array.shift(lineHistory30_6))
-        label.delete(array.shift(labelHistory30_6))
-    while array.size(lineHistory30_7) > 0
-        line.delete(array.shift(lineHistory30_7))
-        label.delete(array.shift(labelHistory30_7))
-    
-    // Clear all line and label history for 10-min cycle
-    while array.size(lineHistory10_0) > 0
-        line.delete(array.shift(lineHistory10_0))
-        label.delete(array.shift(labelHistory10_0))
-    while array.size(lineHistory10_1) > 0
-        line.delete(array.shift(lineHistory10_1))
-        label.delete(array.shift(labelHistory10_1))
-    while array.size(lineHistory10_2) > 0
-        line.delete(array.shift(lineHistory10_2))
-        label.delete(array.shift(labelHistory10_2))
-    while array.size(lineHistory10_3) > 0
-        line.delete(array.shift(lineHistory10_3))
-        label.delete(array.shift(labelHistory10_3))
-    while array.size(lineHistory10_4) > 0
-        line.delete(array.shift(lineHistory10_4))
-        label.delete(array.shift(labelHistory10_4))
-    while array.size(lineHistory10_5) > 0
-        line.delete(array.shift(lineHistory10_5))
-        label.delete(array.shift(labelHistory10_5))
-    while array.size(lineHistory10_6) > 0
-        line.delete(array.shift(lineHistory10_6))
-        label.delete(array.shift(labelHistory10_6))
-    while array.size(lineHistory10_7) > 0
-        line.delete(array.shift(lineHistory10_7))
-        label.delete(array.shift(labelHistory10_7))
-    
-    // Clear all line and label history for 3-min cycle
-    while array.size(lineHistory3_0) > 0
-        line.delete(array.shift(lineHistory3_0))
-        label.delete(array.shift(labelHistory3_0))
-    while array.size(lineHistory3_1) > 0
-        line.delete(array.shift(lineHistory3_1))
-        label.delete(array.shift(labelHistory3_1))
-    while array.size(lineHistory3_2) > 0
-        line.delete(array.shift(lineHistory3_2))
-        label.delete(array.shift(labelHistory3_2))
-    while array.size(lineHistory3_3) > 0
-        line.delete(array.shift(lineHistory3_3))
-        label.delete(array.shift(labelHistory3_3))
-    while array.size(lineHistory3_4) > 0
-        line.delete(array.shift(lineHistory3_4))
-        label.delete(array.shift(labelHistory3_4))
-    while array.size(lineHistory3_5) > 0
-        line.delete(array.shift(lineHistory3_5))
-        label.delete(array.shift(labelHistory3_5))
-    while array.size(lineHistory3_6) > 0
-        line.delete(array.shift(lineHistory3_6))
-        label.delete(array.shift(labelHistory3_6))
-    while array.size(lineHistory3_7) > 0
-        line.delete(array.shift(lineHistory3_7))
-        label.delete(array.shift(labelHistory3_7))
+    // Clear all global line and label history
+    while array.size(globalLineHistory) > 0
+        metadata = array.shift(globalLineHistory)
+        line.delete(metadata.lineObj)
+        label.delete(metadata.labelObj)
     
     currentDay := dayofmonth(time)
 
@@ -485,22 +354,7 @@ processSMT90(cycle, prevCycles, timeLabel) =>
                 mainPrice = isHigh ? smtCycle.mainHigh : smtCycle.mainLow
                 currBar = isHigh ? cycle.mainHighBar : cycle.mainLowBar
                 currPrice = isHigh ? cycle.mainHigh : cycle.mainLow
-                if idx == 0
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_0, labelHistory90_0, isBearish)
-                else if idx == 1
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_1, labelHistory90_1, isBearish)
-                else if idx == 2
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_2, labelHistory90_2, isBearish)
-                else if idx == 3
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_3, labelHistory90_3, isBearish)
-                else if idx == 4
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_4, labelHistory90_4, isBearish)
-                else if idx == 5
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_5, labelHistory90_5, isBearish)
-                else if idx == 6
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_6, labelHistory90_6, isBearish)
-                else if idx == 7
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_7, labelHistory90_7, isBearish)
+                drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, isBearish)
     
     // Trigger alert if SMT detected
     if alertTriggered
@@ -592,22 +446,7 @@ processSMT30(cycle, prevCycles, timeLabel) =>
                 mainPrice = isHigh ? smtCycle.mainHigh : smtCycle.mainLow
                 currBar = isHigh ? cycle.mainHighBar : cycle.mainLowBar
                 currPrice = isHigh ? cycle.mainHigh : cycle.mainLow
-                if idx == 0
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_0, labelHistory30_0, isBearish)
-                else if idx == 1
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_1, labelHistory30_1, isBearish)
-                else if idx == 2
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_2, labelHistory30_2, isBearish)
-                else if idx == 3
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_3, labelHistory30_3, isBearish)
-                else if idx == 4
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_4, labelHistory30_4, isBearish)
-                else if idx == 5
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_5, labelHistory30_5, isBearish)
-                else if idx == 6
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_6, labelHistory30_6, isBearish)
-                else if idx == 7
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_7, labelHistory30_7, isBearish)
+                drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, isBearish)
     
     // Trigger alert if SMT detected
     if alertTriggered
@@ -673,22 +512,7 @@ processSMT10(cycle, prevCycles, timeLabel) =>
                 mainPrice = isHigh ? smtCycle.mainHigh : smtCycle.mainLow
                 currBar = isHigh ? cycle.mainHighBar : cycle.mainLowBar
                 currPrice = isHigh ? cycle.mainHigh : cycle.mainLow
-                if idx == 0
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_0, labelHistory10_0, isBearish)
-                else if idx == 1
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_1, labelHistory10_1, isBearish)
-                else if idx == 2
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_2, labelHistory10_2, isBearish)
-                else if idx == 3
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_3, labelHistory10_3, isBearish)
-                else if idx == 4
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_4, labelHistory10_4, isBearish)
-                else if idx == 5
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_5, labelHistory10_5, isBearish)
-                else if idx == 6
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_6, labelHistory10_6, isBearish)
-                else if idx == 7
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory10_7, labelHistory10_7, isBearish)
+                drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, isBearish)
 
 processSMT10(cycle10, prevCycles10, "10")
 
@@ -748,22 +572,7 @@ processSMT3(cycle, prevCycles, timeLabel) =>
                 mainPrice = isHigh ? smtCycle.mainHigh : smtCycle.mainLow
                 currBar = isHigh ? cycle.mainHighBar : cycle.mainLowBar
                 currPrice = isHigh ? cycle.mainHigh : cycle.mainLow
-                if idx == 0
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_0, labelHistory3_0, isBearish)
-                else if idx == 1
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_1, labelHistory3_1, isBearish)
-                else if idx == 2
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_2, labelHistory3_2, isBearish)
-                else if idx == 3
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_3, labelHistory3_3, isBearish)
-                else if idx == 4
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_4, labelHistory3_4, isBearish)
-                else if idx == 5
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_5, labelHistory3_5, isBearish)
-                else if idx == 6
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_6, labelHistory3_6, isBearish)
-                else if idx == 7
-                    drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory3_7, labelHistory3_7, isBearish)
+                drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, isBearish)
 
 if isValidTimeframeFor3Min
     processSMT3(cycle3, prevCycles3, "3")
