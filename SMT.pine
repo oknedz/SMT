@@ -7,9 +7,9 @@ indicator("SMT V-1.01", "SMT Detector [StoneFace]", overlay=true, max_lines_coun
 
 // Comparison Symbols
 enableSymbol1 = input.bool(true, "Enable Symbol 1", group="Comparison Symbols", inline="sym1")
-symbol1 = input.string("MEXC:BTCUSDT.P", "", group="Comparison Symbols", inline="sym1", tooltip="Primary symbol to compare against the current chart")
+symbol1 = input.symbol("MEXC:BTCUSDT.P", "", confirm=false, group="Comparison Symbols", inline="sym1")
 enableSymbol2 = input.bool(false, "Enable Symbol 2", group="Comparison Symbols", inline="sym2")
-symbol2 = input.string("ES1!", "", group="Comparison Symbols", inline="sym2", tooltip="Secondary symbol to compare against the current chart")
+symbol2 = input.symbol("ES1!", "", confirm=false, group="Comparison Symbols", inline="sym2")
 
 // Cycle Settings
 enable90min = input.bool(true, "90-Minute Cycle", group="Cycle Timeframes", tooltip="Enable 90-minute cycle detection")
@@ -252,201 +252,115 @@ if newDay and not na(time[1])
     array.clear(prevCycles10)
     array.clear(prevCycles3)
     
+    // Reset active cycles to prevent cross-day comparisons
+    cycle90.active := false
+    cycle30.active := false
+    cycle10.active := false
+    cycle3.active := false
+    
     // Clear all line and label history for 90-min cycle
-    for i = 0 to array.size(lineHistory90_0) - 1
-        line.delete(array.get(lineHistory90_0, i))
-        label.delete(array.get(labelHistory90_0, i))
-    array.clear(lineHistory90_0)
-    array.clear(labelHistory90_0)
-    
-    for i = 0 to array.size(lineHistory90_1) - 1
-        line.delete(array.get(lineHistory90_1, i))
-        label.delete(array.get(labelHistory90_1, i))
-    array.clear(lineHistory90_1)
-    array.clear(labelHistory90_1)
-    
-    for i = 0 to array.size(lineHistory90_2) - 1
-        line.delete(array.get(lineHistory90_2, i))
-        label.delete(array.get(labelHistory90_2, i))
-    array.clear(lineHistory90_2)
-    array.clear(labelHistory90_2)
-    
-    for i = 0 to array.size(lineHistory90_3) - 1
-        line.delete(array.get(lineHistory90_3, i))
-        label.delete(array.get(labelHistory90_3, i))
-    array.clear(lineHistory90_3)
-    array.clear(labelHistory90_3)
-    
-    for i = 0 to array.size(lineHistory90_4) - 1
-        line.delete(array.get(lineHistory90_4, i))
-        label.delete(array.get(labelHistory90_4, i))
-    array.clear(lineHistory90_4)
-    array.clear(labelHistory90_4)
-    
-    for i = 0 to array.size(lineHistory90_5) - 1
-        line.delete(array.get(lineHistory90_5, i))
-        label.delete(array.get(labelHistory90_5, i))
-    array.clear(lineHistory90_5)
-    array.clear(labelHistory90_5)
-    
-    for i = 0 to array.size(lineHistory90_6) - 1
-        line.delete(array.get(lineHistory90_6, i))
-        label.delete(array.get(labelHistory90_6, i))
-    array.clear(lineHistory90_6)
-    array.clear(labelHistory90_6)
-    
-    for i = 0 to array.size(lineHistory90_7) - 1
-        line.delete(array.get(lineHistory90_7, i))
-        label.delete(array.get(labelHistory90_7, i))
-    array.clear(lineHistory90_7)
-    array.clear(labelHistory90_7)
+    while array.size(lineHistory90_0) > 0
+        line.delete(array.shift(lineHistory90_0))
+        label.delete(array.shift(labelHistory90_0))
+    while array.size(lineHistory90_1) > 0
+        line.delete(array.shift(lineHistory90_1))
+        label.delete(array.shift(labelHistory90_1))
+    while array.size(lineHistory90_2) > 0
+        line.delete(array.shift(lineHistory90_2))
+        label.delete(array.shift(labelHistory90_2))
+    while array.size(lineHistory90_3) > 0
+        line.delete(array.shift(lineHistory90_3))
+        label.delete(array.shift(labelHistory90_3))
+    while array.size(lineHistory90_4) > 0
+        line.delete(array.shift(lineHistory90_4))
+        label.delete(array.shift(labelHistory90_4))
+    while array.size(lineHistory90_5) > 0
+        line.delete(array.shift(lineHistory90_5))
+        label.delete(array.shift(labelHistory90_5))
+    while array.size(lineHistory90_6) > 0
+        line.delete(array.shift(lineHistory90_6))
+        label.delete(array.shift(labelHistory90_6))
+    while array.size(lineHistory90_7) > 0
+        line.delete(array.shift(lineHistory90_7))
+        label.delete(array.shift(labelHistory90_7))
     
     // Clear all line and label history for 30-min cycle
-    for i = 0 to array.size(lineHistory30_0) - 1
-        line.delete(array.get(lineHistory30_0, i))
-        label.delete(array.get(labelHistory30_0, i))
-    array.clear(lineHistory30_0)
-    array.clear(labelHistory30_0)
-    
-    for i = 0 to array.size(lineHistory30_1) - 1
-        line.delete(array.get(lineHistory30_1, i))
-        label.delete(array.get(labelHistory30_1, i))
-    array.clear(lineHistory30_1)
-    array.clear(labelHistory30_1)
-    
-    for i = 0 to array.size(lineHistory30_2) - 1
-        line.delete(array.get(lineHistory30_2, i))
-        label.delete(array.get(labelHistory30_2, i))
-    array.clear(lineHistory30_2)
-    array.clear(labelHistory30_2)
-    
-    for i = 0 to array.size(lineHistory30_3) - 1
-        line.delete(array.get(lineHistory30_3, i))
-        label.delete(array.get(labelHistory30_3, i))
-    array.clear(lineHistory30_3)
-    array.clear(labelHistory30_3)
-    
-    for i = 0 to array.size(lineHistory30_4) - 1
-        line.delete(array.get(lineHistory30_4, i))
-        label.delete(array.get(labelHistory30_4, i))
-    array.clear(lineHistory30_4)
-    array.clear(labelHistory30_4)
-    
-    for i = 0 to array.size(lineHistory30_5) - 1
-        line.delete(array.get(lineHistory30_5, i))
-        label.delete(array.get(labelHistory30_5, i))
-    array.clear(lineHistory30_5)
-    array.clear(labelHistory30_5)
-    
-    for i = 0 to array.size(lineHistory30_6) - 1
-        line.delete(array.get(lineHistory30_6, i))
-        label.delete(array.get(labelHistory30_6, i))
-    array.clear(lineHistory30_6)
-    array.clear(labelHistory30_6)
-    
-    for i = 0 to array.size(lineHistory30_7) - 1
-        line.delete(array.get(lineHistory30_7, i))
-        label.delete(array.get(labelHistory30_7, i))
-    array.clear(lineHistory30_7)
-    array.clear(labelHistory30_7)
+    while array.size(lineHistory30_0) > 0
+        line.delete(array.shift(lineHistory30_0))
+        label.delete(array.shift(labelHistory30_0))
+    while array.size(lineHistory30_1) > 0
+        line.delete(array.shift(lineHistory30_1))
+        label.delete(array.shift(labelHistory30_1))
+    while array.size(lineHistory30_2) > 0
+        line.delete(array.shift(lineHistory30_2))
+        label.delete(array.shift(labelHistory30_2))
+    while array.size(lineHistory30_3) > 0
+        line.delete(array.shift(lineHistory30_3))
+        label.delete(array.shift(labelHistory30_3))
+    while array.size(lineHistory30_4) > 0
+        line.delete(array.shift(lineHistory30_4))
+        label.delete(array.shift(labelHistory30_4))
+    while array.size(lineHistory30_5) > 0
+        line.delete(array.shift(lineHistory30_5))
+        label.delete(array.shift(labelHistory30_5))
+    while array.size(lineHistory30_6) > 0
+        line.delete(array.shift(lineHistory30_6))
+        label.delete(array.shift(labelHistory30_6))
+    while array.size(lineHistory30_7) > 0
+        line.delete(array.shift(lineHistory30_7))
+        label.delete(array.shift(labelHistory30_7))
     
     // Clear all line and label history for 10-min cycle
-    for i = 0 to array.size(lineHistory10_0) - 1
-        line.delete(array.get(lineHistory10_0, i))
-        label.delete(array.get(labelHistory10_0, i))
-    array.clear(lineHistory10_0)
-    array.clear(labelHistory10_0)
-    
-    for i = 0 to array.size(lineHistory10_1) - 1
-        line.delete(array.get(lineHistory10_1, i))
-        label.delete(array.get(labelHistory10_1, i))
-    array.clear(lineHistory10_1)
-    array.clear(labelHistory10_1)
-    
-    for i = 0 to array.size(lineHistory10_2) - 1
-        line.delete(array.get(lineHistory10_2, i))
-        label.delete(array.get(labelHistory10_2, i))
-    array.clear(lineHistory10_2)
-    array.clear(labelHistory10_2)
-    
-    for i = 0 to array.size(lineHistory10_3) - 1
-        line.delete(array.get(lineHistory10_3, i))
-        label.delete(array.get(labelHistory10_3, i))
-    array.clear(lineHistory10_3)
-    array.clear(labelHistory10_3)
-    
-    for i = 0 to array.size(lineHistory10_4) - 1
-        line.delete(array.get(lineHistory10_4, i))
-        label.delete(array.get(labelHistory10_4, i))
-    array.clear(lineHistory10_4)
-    array.clear(labelHistory10_4)
-    
-    for i = 0 to array.size(lineHistory10_5) - 1
-        line.delete(array.get(lineHistory10_5, i))
-        label.delete(array.get(labelHistory10_5, i))
-    array.clear(lineHistory10_5)
-    array.clear(labelHistory10_5)
-    
-    for i = 0 to array.size(lineHistory10_6) - 1
-        line.delete(array.get(lineHistory10_6, i))
-        label.delete(array.get(labelHistory10_6, i))
-    array.clear(lineHistory10_6)
-    array.clear(labelHistory10_6)
-    
-    for i = 0 to array.size(lineHistory10_7) - 1
-        line.delete(array.get(lineHistory10_7, i))
-        label.delete(array.get(labelHistory10_7, i))
-    array.clear(lineHistory10_7)
-    array.clear(labelHistory10_7)
+    while array.size(lineHistory10_0) > 0
+        line.delete(array.shift(lineHistory10_0))
+        label.delete(array.shift(labelHistory10_0))
+    while array.size(lineHistory10_1) > 0
+        line.delete(array.shift(lineHistory10_1))
+        label.delete(array.shift(labelHistory10_1))
+    while array.size(lineHistory10_2) > 0
+        line.delete(array.shift(lineHistory10_2))
+        label.delete(array.shift(labelHistory10_2))
+    while array.size(lineHistory10_3) > 0
+        line.delete(array.shift(lineHistory10_3))
+        label.delete(array.shift(labelHistory10_3))
+    while array.size(lineHistory10_4) > 0
+        line.delete(array.shift(lineHistory10_4))
+        label.delete(array.shift(labelHistory10_4))
+    while array.size(lineHistory10_5) > 0
+        line.delete(array.shift(lineHistory10_5))
+        label.delete(array.shift(labelHistory10_5))
+    while array.size(lineHistory10_6) > 0
+        line.delete(array.shift(lineHistory10_6))
+        label.delete(array.shift(labelHistory10_6))
+    while array.size(lineHistory10_7) > 0
+        line.delete(array.shift(lineHistory10_7))
+        label.delete(array.shift(labelHistory10_7))
     
     // Clear all line and label history for 3-min cycle
-    for i = 0 to array.size(lineHistory3_0) - 1
-        line.delete(array.get(lineHistory3_0, i))
-        label.delete(array.get(labelHistory3_0, i))
-    array.clear(lineHistory3_0)
-    array.clear(labelHistory3_0)
-    
-    for i = 0 to array.size(lineHistory3_1) - 1
-        line.delete(array.get(lineHistory3_1, i))
-        label.delete(array.get(labelHistory3_1, i))
-    array.clear(lineHistory3_1)
-    array.clear(labelHistory3_1)
-    
-    for i = 0 to array.size(lineHistory3_2) - 1
-        line.delete(array.get(lineHistory3_2, i))
-        label.delete(array.get(labelHistory3_2, i))
-    array.clear(lineHistory3_2)
-    array.clear(labelHistory3_2)
-    
-    for i = 0 to array.size(lineHistory3_3) - 1
-        line.delete(array.get(lineHistory3_3, i))
-        label.delete(array.get(labelHistory3_3, i))
-    array.clear(lineHistory3_3)
-    array.clear(labelHistory3_3)
-    
-    for i = 0 to array.size(lineHistory3_4) - 1
-        line.delete(array.get(lineHistory3_4, i))
-        label.delete(array.get(labelHistory3_4, i))
-    array.clear(lineHistory3_4)
-    array.clear(labelHistory3_4)
-    
-    for i = 0 to array.size(lineHistory3_5) - 1
-        line.delete(array.get(lineHistory3_5, i))
-        label.delete(array.get(labelHistory3_5, i))
-    array.clear(lineHistory3_5)
-    array.clear(labelHistory3_5)
-    
-    for i = 0 to array.size(lineHistory3_6) - 1
-        line.delete(array.get(lineHistory3_6, i))
-        label.delete(array.get(labelHistory3_6, i))
-    array.clear(lineHistory3_6)
-    array.clear(labelHistory3_6)
-    
-    for i = 0 to array.size(lineHistory3_7) - 1
-        line.delete(array.get(lineHistory3_7, i))
-        label.delete(array.get(labelHistory3_7, i))
-    array.clear(lineHistory3_7)
-    array.clear(labelHistory3_7)
+    while array.size(lineHistory3_0) > 0
+        line.delete(array.shift(lineHistory3_0))
+        label.delete(array.shift(labelHistory3_0))
+    while array.size(lineHistory3_1) > 0
+        line.delete(array.shift(lineHistory3_1))
+        label.delete(array.shift(labelHistory3_1))
+    while array.size(lineHistory3_2) > 0
+        line.delete(array.shift(lineHistory3_2))
+        label.delete(array.shift(labelHistory3_2))
+    while array.size(lineHistory3_3) > 0
+        line.delete(array.shift(lineHistory3_3))
+        label.delete(array.shift(labelHistory3_3))
+    while array.size(lineHistory3_4) > 0
+        line.delete(array.shift(lineHistory3_4))
+        label.delete(array.shift(labelHistory3_4))
+    while array.size(lineHistory3_5) > 0
+        line.delete(array.shift(lineHistory3_5))
+        label.delete(array.shift(labelHistory3_5))
+    while array.size(lineHistory3_6) > 0
+        line.delete(array.shift(lineHistory3_6))
+        label.delete(array.shift(labelHistory3_6))
+    while array.size(lineHistory3_7) > 0
+        line.delete(array.shift(lineHistory3_7))
+        label.delete(array.shift(labelHistory3_7))
     
     currentDay := dayofmonth(time)
 
@@ -487,6 +401,9 @@ if inSession()
 //                              SMT PROCESSING
 // ═══════════════════════════════════════════════════════════════════════════════
 processSMT90(cycle, prevCycles, timeLabel) =>
+    alertTriggered = false
+    alertMessage = ""
+    
     if cycle.active and array.size(prevCycles) > 0
         CycleData[] smtCycles = array.new<CycleData>(8, na)
         array<int> cyclesToRemove = array.new<int>()
@@ -500,30 +417,53 @@ processSMT90(cycle, prevCycles, timeLabel) =>
                 if na(array.get(smtCycles, 0)) and detectBearishSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s1High, prevCycle.s1High)
                     array.set(smtCycles, 0, prevCycle)
                     cycleHasSMT := true
+                    alertTriggered := true
+                    alertMessage := "Bearish SMT 90-min - " + getSymbolAbbr(symbol1)
                 if na(array.get(smtCycles, 1)) and detectBullishSMT(cycle.mainLow, prevCycle.mainLow, cycle.s1Low, prevCycle.s1Low)
                     array.set(smtCycles, 1, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish SMT 90-min - " + getSymbolAbbr(symbol1)
                 if na(array.get(smtCycles, 4)) and detectBearishInverseSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s1High, prevCycle.s1High)
                     array.set(smtCycles, 4, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bearish Inverse SMT 90-min - " + getSymbolAbbr(symbol1)
                 if na(array.get(smtCycles, 5)) and detectBullishInverseSMT(cycle.mainLow, prevCycle.mainLow, cycle.s1Low, prevCycle.s1Low)
                     array.set(smtCycles, 5, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish Inverse SMT 90-min - " + getSymbolAbbr(symbol1)
             
             // Check all SMT types for Symbol 2
             if enableSymbol2
                 if na(array.get(smtCycles, 2)) and detectBearishSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s2High, prevCycle.s2High)
                     array.set(smtCycles, 2, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bearish SMT 90-min - " + getSymbolAbbr(symbol2)
                 if na(array.get(smtCycles, 3)) and detectBullishSMT(cycle.mainLow, prevCycle.mainLow, cycle.s2Low, prevCycle.s2Low)
                     array.set(smtCycles, 3, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish SMT 90-min - " + getSymbolAbbr(symbol2)
                 if na(array.get(smtCycles, 6)) and detectBearishInverseSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s2High, prevCycle.s2High)
                     array.set(smtCycles, 6, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bearish Inverse SMT 90-min - " + getSymbolAbbr(symbol2)
                 if na(array.get(smtCycles, 7)) and detectBullishInverseSMT(cycle.mainLow, prevCycle.mainLow, cycle.s2Low, prevCycle.s2Low)
                     array.set(smtCycles, 7, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish Inverse SMT 90-min - " + getSymbolAbbr(symbol2)
             
             if not cycleHasSMT and array.size(prevCycles) > 3 and i < array.size(prevCycles) - 3
                 array.push(cyclesToRemove, i)
@@ -561,10 +501,19 @@ processSMT90(cycle, prevCycles, timeLabel) =>
                     drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_6, labelHistory90_6, isBearish)
                 else if idx == 7
                     drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory90_7, labelHistory90_7, isBearish)
+    
+    // Trigger alert if SMT detected
+    if alertTriggered
+        alert(alertMessage, alert.freq_once_per_bar)
+    
+    alertTriggered
 
 processSMT90(cycle90, prevCycles90, "90")
 
 processSMT30(cycle, prevCycles, timeLabel) =>
+    alertTriggered = false
+    alertMessage = ""
+    
     if cycle.active and array.size(prevCycles) > 0
         CycleData[] smtCycles = array.new<CycleData>(8, na)
         array<int> cyclesToRemove = array.new<int>()
@@ -577,29 +526,52 @@ processSMT30(cycle, prevCycles, timeLabel) =>
                 if na(array.get(smtCycles, 0)) and detectBearishSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s1High, prevCycle.s1High)
                     array.set(smtCycles, 0, prevCycle)
                     cycleHasSMT := true
+                    alertTriggered := true
+                    alertMessage := "Bearish SMT 30-min - " + getSymbolAbbr(symbol1)
                 if na(array.get(smtCycles, 1)) and detectBullishSMT(cycle.mainLow, prevCycle.mainLow, cycle.s1Low, prevCycle.s1Low)
                     array.set(smtCycles, 1, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish SMT 30-min - " + getSymbolAbbr(symbol1)
                 if na(array.get(smtCycles, 4)) and detectBearishInverseSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s1High, prevCycle.s1High)
                     array.set(smtCycles, 4, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bearish Inverse SMT 30-min - " + getSymbolAbbr(symbol1)
                 if na(array.get(smtCycles, 5)) and detectBullishInverseSMT(cycle.mainLow, prevCycle.mainLow, cycle.s1Low, prevCycle.s1Low)
                     array.set(smtCycles, 5, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish Inverse SMT 30-min - " + getSymbolAbbr(symbol1)
             
             if enableSymbol2
                 if na(array.get(smtCycles, 2)) and detectBearishSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s2High, prevCycle.s2High)
                     array.set(smtCycles, 2, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bearish SMT 30-min - " + getSymbolAbbr(symbol2)
                 if na(array.get(smtCycles, 3)) and detectBullishSMT(cycle.mainLow, prevCycle.mainLow, cycle.s2Low, prevCycle.s2Low)
                     array.set(smtCycles, 3, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish SMT 30-min - " + getSymbolAbbr(symbol2)
                 if na(array.get(smtCycles, 6)) and detectBearishInverseSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s2High, prevCycle.s2High)
                     array.set(smtCycles, 6, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bearish Inverse SMT 30-min - " + getSymbolAbbr(symbol2)
                 if na(array.get(smtCycles, 7)) and detectBullishInverseSMT(cycle.mainLow, prevCycle.mainLow, cycle.s2Low, prevCycle.s2Low)
                     array.set(smtCycles, 7, prevCycle)
                     cycleHasSMT := true
+                    if not alertTriggered
+                        alertTriggered := true
+                        alertMessage := "Bullish Inverse SMT 30-min - " + getSymbolAbbr(symbol2)
             
             if not cycleHasSMT and array.size(prevCycles) > 3 and i < array.size(prevCycles) - 3
                 array.push(cyclesToRemove, i)
@@ -636,6 +608,12 @@ processSMT30(cycle, prevCycles, timeLabel) =>
                     drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_6, labelHistory30_6, isBearish)
                 else if idx == 7
                     drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, lineHistory30_7, labelHistory30_7, isBearish)
+    
+    // Trigger alert if SMT detected
+    if alertTriggered
+        alert(alertMessage, alert.freq_once_per_bar)
+    
+    alertTriggered
 
 processSMT30(cycle30, prevCycles30, "30")
 
