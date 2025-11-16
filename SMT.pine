@@ -1,64 +1,49 @@
 //@version=6
-indicator("SMT Cycle Divergence", "SMT", overlay=true, max_lines_count=500, max_labels_count=500)
+indicator("SMT V-1.01", "SMT Detector [StoneFace]", overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                              INPUT SETTINGS
+//                              INPUTS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// Cycle Settings
-enable90min = input.bool(true, "Enable 90-min Cycle", group="Cycle Settings")
-enable30min = input.bool(true, "Enable 30-min Cycle", group="Cycle Settings")
-enable10min = input.bool(true, "Enable 10-min Cycle", group="Cycle Settings")
-
-// Session Settings
-enableSession = input.bool(true, "Enable Session Filter", group="Session Settings")
-sessionStart = input.session("0230-1600", "Session Time", group="Session Settings")
-sessionTimezone = input.string("America/New_York", "Timezone", group="Session Settings")
 
 // Comparison Symbols
-symbol1 = input.string("MEXC:BTCUSDT.P", "Symbol 1", group="Comparison Symbols")
-enableSymbol1 = input.bool(true, "Enable Symbol 1", group="Comparison Symbols")
-symbol2 = input.string("ES1!", "Symbol 2", group="Comparison Symbols")
-enableSymbol2 = input.bool(false, "Enable Symbol 2", group="Comparison Symbols")
+enableSymbol1 = input.bool(true, "Enable Symbol 1", group="Comparison Symbols", inline="sym1")
+symbol1 = input.string("MEXC:BTCUSDT.P", "", group="Comparison Symbols", inline="sym1", tooltip="Primary symbol to compare against the current chart")
+enableSymbol2 = input.bool(false, "Enable Symbol 2", group="Comparison Symbols", inline="sym2")
+symbol2 = input.string("ES1!", "", group="Comparison Symbols", inline="sym2", tooltip="Secondary symbol to compare against the current chart")
+
+// Cycle Settings
+enable90min = input.bool(true, "90-Minute Cycle", group="Cycle Timeframes", tooltip="Enable 90-minute cycle detection")
+enable30min = input.bool(true, "30-Minute Cycle", group="Cycle Timeframes", tooltip="Enable 30-minute cycle detection")
+enable10min = input.bool(true, "10-Minute Cycle", group="Cycle Timeframes", tooltip="Enable 10-minute cycle detection")
+enable3min = input.bool(true, "3-Minute Cycle", group="Cycle Timeframes", tooltip="Enable 3-minute cycle detection (only works on 1-minute or lower timeframes)")
+
+// Session Filter
+enableSession = input.bool(true, "Enable Session Filter", group="Session Filter", tooltip="Only detect SMT during specified session times")
+sessionStart = input.session("0230-1600", "Session Time", group="Session Filter", tooltip="Trading session hours")
+sessionTimezone = input.string("America/New_York", "Timezone", options=["America/New_York", "America/Chicago", "Europe/London"], group="Session Filter", tooltip="Timezone for session filter")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// Get symbol abbreviation for labels
 getSymbolAbbr(sym) =>
     parts = str.split(sym, ":")
     symbolPart = array.size(parts) > 1 ? array.get(parts, 1) : array.get(parts, 0)
-    // Remove numbers and special chars for cleaner label
-    cleanSymbol = str.replace_all(symbolPart, "1!", "")
-    cleanSymbol := str.replace_all(cleanSymbol, "USDT", "")
+    cleanSymbol = str.replace_all(str.replace_all(symbolPart, "1!", ""), "USDT", "")
     str.substring(cleanSymbol, 0, math.min(str.length(cleanSymbol), 6))
 
-// Check if current bar is within session
-inSession() =>
-    if not enableSession
-        true
-    else
-        not na(time(timeframe.period, sessionStart, sessionTimezone))
+inSession() => not enableSession or not na(time(timeframe.period, sessionStart, sessionTimezone))
 
-// Get cycle duration in milliseconds
-getCycleDuration(cycleMinutes) =>
-    cycleMinutes * 60 * 1000
+getCycleDuration(cycleMinutes) => cycleMinutes * 60 * 1000
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                           DATA FETCHING
+//                              DATA FETCHING
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// Fetch Symbol 1 data
 [s1_high, s1_low, s1_close] = request.security(symbol1, timeframe.period, [high, low, close], lookahead=barmerge.lookahead_off)
-
-// Fetch Symbol 2 data
 [s2_high, s2_low, s2_close] = request.security(symbol2, timeframe.period, [high, low, close], lookahead=barmerge.lookahead_off)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                           CYCLE TRACKING TYPE
+//                              CYCLE TYPE
 // ═══════════════════════════════════════════════════════════════════════════════
-
 type CycleData
     int startTime
     int startBar
@@ -77,51 +62,33 @@ type CycleData
     bool active
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                           CYCLE DETECTION & TRACKING
+//                              CYCLE TRACKING
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// Initialize current cycle data storage
 var cycle90 = CycleData.new(na, na, na, na, na, na, na, na, na, na, na, na, na, na, false)
 var cycle30 = CycleData.new(na, na, na, na, na, na, na, na, na, na, na, na, na, na, false)
 var cycle10 = CycleData.new(na, na, na, na, na, na, na, na, na, na, na, na, na, na, false)
+var cycle3 = CycleData.new(na, na, na, na, na, na, na, na, na, na, na, na, na, na, false)
 
-// Track arrays of previous cycles for the current day
 var array<CycleData> prevCycles90 = array.new<CycleData>()
 var array<CycleData> prevCycles30 = array.new<CycleData>()
 var array<CycleData> prevCycles10 = array.new<CycleData>()
+var array<CycleData> prevCycles3 = array.new<CycleData>()
 
-// Track current day for resetting arrays
 var int currentDay = na
 
-// Track active SMT line IDs for updating (prevents multiple lines for same divergence)
-var line activeLine90_s1_bull = na
-var line activeLine90_s1_bear = na
-var line activeLine90_s2_bull = na
-var line activeLine90_s2_bear = na
-var line activeLine30_s1_bull = na
-var line activeLine30_s1_bear = na
-var line activeLine30_s2_bull = na
-var line activeLine30_s2_bear = na
-var line activeLine10_s1_bull = na
-var line activeLine10_s1_bear = na
-var line activeLine10_s2_bull = na
-var line activeLine10_s2_bear = na
+// Active line/label tracking arrays
+var line[] activeLines90 = array.new<line>(8, na)
+var label[] activeLabels90 = array.new<label>(8, na)
+var line[] activeLines30 = array.new<line>(8, na)
+var label[] activeLabels30 = array.new<label>(8, na)
+var line[] activeLines10 = array.new<line>(8, na)
+var label[] activeLabels10 = array.new<label>(8, na)
+var line[] activeLines3 = array.new<line>(8, na)
+var label[] activeLabels3 = array.new<label>(8, na)
 
-// Track active SMT label IDs for updating
-var label activeLabel90_s1_bull = na
-var label activeLabel90_s1_bear = na
-var label activeLabel90_s2_bull = na
-var label activeLabel90_s2_bear = na
-var label activeLabel30_s1_bull = na
-var label activeLabel30_s1_bear = na
-var label activeLabel30_s2_bull = na
-var label activeLabel30_s2_bear = na
-var label activeLabel10_s1_bull = na
-var label activeLabel10_s1_bear = na
-var label activeLabel10_s2_bull = na
-var label activeLabel10_s2_bear = na
-
-// Function to start new cycle
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              CORE FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
 startNewCycle(cycleData) =>
     cycleData.startTime := time
     cycleData.startBar := bar_index
@@ -139,18 +106,14 @@ startNewCycle(cycleData) =>
     cycleData.s2LowBar := bar_index
     cycleData.active := true
 
-// Function to update cycle with current bar data
 updateCycle(cycleData) =>
     if cycleData.active
-        // Update main chart high/low
         if high > cycleData.mainHigh
             cycleData.mainHigh := high
             cycleData.mainHighBar := bar_index
         if low < cycleData.mainLow
             cycleData.mainLow := low
             cycleData.mainLowBar := bar_index
-        
-        // Update Symbol 1 high/low
         if enableSymbol1 and not na(s1_high)
             if s1_high > cycleData.s1High
                 cycleData.s1High := s1_high
@@ -158,8 +121,6 @@ updateCycle(cycleData) =>
             if s1_low < cycleData.s1Low
                 cycleData.s1Low := s1_low
                 cycleData.s1LowBar := bar_index
-        
-        // Update Symbol 2 high/low
         if enableSymbol2 and not na(s2_high)
             if s2_high > cycleData.s2High
                 cycleData.s2High := s2_high
@@ -168,385 +129,166 @@ updateCycle(cycleData) =>
                 cycleData.s2Low := s2_low
                 cycleData.s2LowBar := bar_index
 
-// Function to save cycle to array and start new cycle
 completeCycle(cycleData, prevCyclesArray) =>
-    // Create a copy of current cycle data to store in array
-    savedCycle = CycleData.new()
-    savedCycle.startTime := cycleData.startTime
-    savedCycle.startBar := cycleData.startBar
-    savedCycle.mainHigh := cycleData.mainHigh
-    savedCycle.mainLow := cycleData.mainLow
-    savedCycle.mainHighBar := cycleData.mainHighBar
-    savedCycle.mainLowBar := cycleData.mainLowBar
-    savedCycle.s1High := cycleData.s1High
-    savedCycle.s1Low := cycleData.s1Low
-    savedCycle.s1HighBar := cycleData.s1HighBar
-    savedCycle.s1LowBar := cycleData.s1LowBar
-    savedCycle.s2High := cycleData.s2High
-    savedCycle.s2Low := cycleData.s2Low
-    savedCycle.s2HighBar := cycleData.s2HighBar
-    savedCycle.s2LowBar := cycleData.s2LowBar
-    savedCycle.active := true
-    
-    // Add to array of previous cycles
+    savedCycle = CycleData.new(cycleData.startTime, cycleData.startBar, cycleData.mainHigh, cycleData.mainLow, cycleData.mainHighBar, cycleData.mainLowBar, cycleData.s1High, cycleData.s1Low, cycleData.s1HighBar, cycleData.s1LowBar, cycleData.s2High, cycleData.s2Low, cycleData.s2HighBar, cycleData.s2LowBar, true)
     array.push(prevCyclesArray, savedCycle)
-    
-    // Start new cycle
     startNewCycle(cycleData)
 
-// Function to check if cycle should complete
-shouldCompleteCycle(cycleData, cycleDuration) =>
-    cycleData.active and not na(cycleData.startTime) and (time - cycleData.startTime >= cycleDuration)
+shouldCompleteCycle(cycleData, cycleDuration) => cycleData.active and not na(cycleData.startTime) and (time - cycleData.startTime >= cycleDuration)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                           CYCLE MANAGEMENT
+//                              SMT DETECTION
 // ═══════════════════════════════════════════════════════════════════════════════
+detectBearishSMT(mainCurr, mainPrev, compCurr, compPrev) =>
+    not na(mainCurr) and not na(mainPrev) and not na(compCurr) and not na(compPrev) and mainCurr > mainPrev and compCurr < compPrev
 
-// Check if new day started - reset arrays
+detectBullishSMT(mainCurr, mainPrev, compCurr, compPrev) =>
+    not na(mainCurr) and not na(mainPrev) and not na(compCurr) and not na(compPrev) and mainCurr < mainPrev and compCurr > compPrev
+
+detectBearishInverseSMT(mainCurr, mainPrev, compCurr, compPrev) =>
+    not na(mainCurr) and not na(mainPrev) and not na(compCurr) and not na(compPrev) and compCurr > compPrev and mainCurr < mainPrev
+
+detectBullishInverseSMT(mainCurr, mainPrev, compCurr, compPrev) =>
+    not na(mainCurr) and not na(mainPrev) and not na(compCurr) and not na(compPrev) and compCurr < compPrev and mainCurr > mainPrev
+
+drawOrUpdateSMT(mainBar, mainPrice, compBar, compPrice, labelText, activeLine, activeLabel, isBearish) =>
+    line newLine = na
+    label newLabel = na
+    if not na(mainBar) and not na(compBar)
+        if not na(activeLine)
+            line.delete(activeLine)
+        if not na(activeLabel)
+            label.delete(activeLabel)
+        newLine := line.new(mainBar, mainPrice, compBar, compPrice, color=color.black, width=1, style=line.style_solid)
+        
+        // Calculate center position of the line
+        centerBar = math.round((mainBar + compBar) / 2)
+        centerPrice = (mainPrice + compPrice) / 2
+        
+        // Position label above line for bearish, below line for bullish
+        labelStyle = isBearish ? label.style_label_down : label.style_label_up
+        
+        newLabel := label.new(centerBar, centerPrice, labelText, style=labelStyle, color=color.black, textcolor=color.white, size=size.small, yloc=yloc.price, xloc=xloc.bar_index)
+    [newLine, newLabel]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              CYCLE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
 newDay = dayofmonth(time) != dayofmonth(time[1])
 if newDay and not na(time[1])
     array.clear(prevCycles90)
     array.clear(prevCycles30)
     array.clear(prevCycles10)
+    array.clear(prevCycles3)
     currentDay := dayofmonth(time)
 
+// Check if on 1-minute or lower timeframe for 3-minute cycle
+isValidTimeframeFor3Min = timeframe.in_seconds(timeframe.period) <= 60
+
 if inSession()
-    // Initialize cycles on first bar in session
     if not cycle90.active and enable90min
         startNewCycle(cycle90)
     if not cycle30.active and enable30min
         startNewCycle(cycle30)
     if not cycle10.active and enable10min
         startNewCycle(cycle10)
+    if not cycle3.active and enable3min and isValidTimeframeFor3Min
+        startNewCycle(cycle3)
     
-    // Check and complete 90-min cycle
     if enable90min and shouldCompleteCycle(cycle90, getCycleDuration(90))
         completeCycle(cycle90, prevCycles90)
     else if enable90min
         updateCycle(cycle90)
     
-    // Check and complete 30-min cycle
     if enable30min and shouldCompleteCycle(cycle30, getCycleDuration(30))
         completeCycle(cycle30, prevCycles30)
     else if enable30min
         updateCycle(cycle30)
     
-    // Check and complete 10-min cycle
     if enable10min and shouldCompleteCycle(cycle10, getCycleDuration(10))
         completeCycle(cycle10, prevCycles10)
     else if enable10min
         updateCycle(cycle10)
+    
+    if enable3min and isValidTimeframeFor3Min and shouldCompleteCycle(cycle3, getCycleDuration(3))
+        completeCycle(cycle3, prevCycles3)
+    else if enable3min and isValidTimeframeFor3Min
+        updateCycle(cycle3)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                           SMT DIVERGENCE DETECTION
+//                              SMT PROCESSING
 // ═══════════════════════════════════════════════════════════════════════════════
+processSMT(cycle, prevCycles, activeLines, activeLabels, timeLabel) =>
+    if cycle.active and array.size(prevCycles) > 0
+        CycleData[] smtCycles = array.new<CycleData>(8, na)
+        array<int> cyclesToRemove = array.new<int>()
+        
+        for i = 0 to array.size(prevCycles) - 1
+            prevCycle = array.get(prevCycles, i)
+            bool cycleHasSMT = false
+            
+            // Check all SMT types for Symbol 1
+            if enableSymbol1
+                if na(array.get(smtCycles, 0)) and detectBearishSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s1High, prevCycle.s1High)
+                    array.set(smtCycles, 0, prevCycle)
+                    cycleHasSMT := true
+                if na(array.get(smtCycles, 1)) and detectBullishSMT(cycle.mainLow, prevCycle.mainLow, cycle.s1Low, prevCycle.s1Low)
+                    array.set(smtCycles, 1, prevCycle)
+                    cycleHasSMT := true
+                if na(array.get(smtCycles, 4)) and detectBearishInverseSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s1High, prevCycle.s1High)
+                    array.set(smtCycles, 4, prevCycle)
+                    cycleHasSMT := true
+                if na(array.get(smtCycles, 5)) and detectBullishInverseSMT(cycle.mainLow, prevCycle.mainLow, cycle.s1Low, prevCycle.s1Low)
+                    array.set(smtCycles, 5, prevCycle)
+                    cycleHasSMT := true
+            
+            // Check all SMT types for Symbol 2
+            if enableSymbol2
+                if na(array.get(smtCycles, 2)) and detectBearishSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s2High, prevCycle.s2High)
+                    array.set(smtCycles, 2, prevCycle)
+                    cycleHasSMT := true
+                if na(array.get(smtCycles, 3)) and detectBullishSMT(cycle.mainLow, prevCycle.mainLow, cycle.s2Low, prevCycle.s2Low)
+                    array.set(smtCycles, 3, prevCycle)
+                    cycleHasSMT := true
+                if na(array.get(smtCycles, 6)) and detectBearishInverseSMT(cycle.mainHigh, prevCycle.mainHigh, cycle.s2High, prevCycle.s2High)
+                    array.set(smtCycles, 6, prevCycle)
+                    cycleHasSMT := true
+                if na(array.get(smtCycles, 7)) and detectBullishInverseSMT(cycle.mainLow, prevCycle.mainLow, cycle.s2Low, prevCycle.s2Low)
+                    array.set(smtCycles, 7, prevCycle)
+                    cycleHasSMT := true
+            
+            if not cycleHasSMT and array.size(prevCycles) > 3 and i < array.size(prevCycles) - 3
+                array.push(cyclesToRemove, i)
+        
+        if array.size(cyclesToRemove) > 0
+            for i = array.size(cyclesToRemove) - 1 to 0
+                array.remove(prevCycles, array.get(cyclesToRemove, i))
+        
+        // Draw/update all SMT types
+        string[] labels = array.from("SMT-" + getSymbolAbbr(symbol1), "SMT-" + getSymbolAbbr(symbol1), "SMT-" + getSymbolAbbr(symbol2), "SMT-" + getSymbolAbbr(symbol2), "SMT-" + getSymbolAbbr(symbol1), "SMT-" + getSymbolAbbr(symbol1), "SMT-" + getSymbolAbbr(symbol2), "SMT-" + getSymbolAbbr(symbol2))
+        
+        bool[] isEnabled = array.from(enableSymbol1, enableSymbol1, enableSymbol2, enableSymbol2, enableSymbol1, enableSymbol1, enableSymbol2, enableSymbol2)
+        
+        for idx = 0 to 7
+            smtCycle = array.get(smtCycles, idx)
+            if array.get(isEnabled, idx) and not na(smtCycle)
+                isHigh = idx == 0 or idx == 2 or idx == 4 or idx == 6
+                isBearish = idx == 0 or idx == 2 or idx == 4 or idx == 6
+                mainBar = isHigh ? smtCycle.mainHighBar : smtCycle.mainLowBar
+                mainPrice = isHigh ? smtCycle.mainHigh : smtCycle.mainLow
+                currBar = isHigh ? cycle.mainHighBar : cycle.mainLowBar
+                currPrice = isHigh ? cycle.mainHigh : cycle.mainLow
+                [newLine, newLabel] = drawOrUpdateSMT(mainBar, mainPrice, currBar, currPrice, array.get(labels, idx) + " " + timeLabel, array.get(activeLines, idx), array.get(activeLabels, idx), isBearish)
+                array.set(activeLines, idx, newLine)
+                array.set(activeLabels, idx, newLabel)
+            else if array.get(isEnabled, idx) and not na(array.get(activeLines, idx))
+                line.delete(array.get(activeLines, idx))
+                label.delete(array.get(activeLabels, idx))
+                array.set(activeLines, idx, na)
+                array.set(activeLabels, idx, na)
 
-// Function to detect bearish SMT (higher highs divergence)
-detectBearishSMT(mainCurrentHigh, mainPrevHigh, compCurrentHigh, compPrevHigh) =>
-    not na(mainCurrentHigh) and not na(mainPrevHigh) and not na(compCurrentHigh) and not na(compPrevHigh) and
-     mainCurrentHigh > mainPrevHigh and compCurrentHigh < compPrevHigh
-
-// Function to detect bullish SMT (lower lows divergence)
-detectBullishSMT(mainCurrentLow, mainPrevLow, compCurrentLow, compPrevLow) =>
-    not na(mainCurrentLow) and not na(mainPrevLow) and not na(compCurrentLow) and not na(compPrevLow) and
-     mainCurrentLow < mainPrevLow and compCurrentLow > compPrevLow
-
-// Function to check if bearish SMT has ended (symbols became correlated)
-bearishSMTEnded(mainCurrentHigh, mainPrevHigh, compCurrentHigh, compPrevHigh) =>
-    not na(mainCurrentHigh) and not na(mainPrevHigh) and not na(compCurrentHigh) and not na(compPrevHigh) and
-     mainCurrentHigh > mainPrevHigh and compCurrentHigh >= compPrevHigh
-
-// Function to check if bullish SMT has ended (symbols became correlated)
-bullishSMTEnded(mainCurrentLow, mainPrevLow, compCurrentLow, compPrevLow) =>
-    not na(mainCurrentLow) and not na(mainPrevLow) and not na(compCurrentLow) and not na(compPrevLow) and
-     mainCurrentLow < mainPrevLow and compCurrentLow <= compPrevLow
-
-// Function to draw or update SMT line and label
-drawOrUpdateSMT(mainBar, mainPrice, compBar, compPrice, labelText, isBullish, activeLine, activeLabel) =>
-    line newLine = na
-    label newLabel = na
-    
-    if not na(mainBar) and not na(compBar)
-        // Delete previous line and label if they exist
-        if not na(activeLine)
-            line.delete(activeLine)
-        if not na(activeLabel)
-            label.delete(activeLabel)
-        
-        // Draw new line connecting the divergent pivots
-        newLine := line.new(mainBar, mainPrice, compBar, compPrice, color=color.black, width=1, style=line.style_solid)
-        
-        // Add label at the most recent pivot
-        labelBar = math.max(mainBar, compBar)
-        labelPrice = mainBar > compBar ? mainPrice : compPrice
-        newLabel := label.new(labelBar, labelPrice, labelText, 
-                 style=label.style_none, 
-                 color=color.black, 
-                 textcolor=color.black, 
-                 size=size.small,
-                 yloc=yloc.price,
-                 xloc=xloc.bar_index)
-    
-    [newLine, newLabel]
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//                           SMT DETECTION - 90 MIN
-// ═══════════════════════════════════════════════════════════════════════════════
-
-if enable90min and cycle90.active and array.size(prevCycles90) > 0
-    
-    // Track the longest (oldest) SMT divergence for each type
-    int s1_bear_oldestIdx = -1
-    int s1_bull_oldestIdx = -1
-    int s2_bear_oldestIdx = -1
-    int s2_bull_oldestIdx = -1
-    
-    // Loop through all previous cycles from today to find the LONGEST active SMT
-    for i = 0 to array.size(prevCycles90) - 1
-        prevCycle = array.get(prevCycles90, i)
-        
-        // Check Symbol 1 - Bearish SMT (highs) - find oldest
-        if enableSymbol1 and s1_bear_oldestIdx == -1
-            if detectBearishSMT(cycle90.mainHigh, prevCycle.mainHigh, cycle90.s1High, prevCycle.s1High)
-                s1_bear_oldestIdx := i
-        
-        // Check Symbol 1 - Bullish SMT (lows) - find oldest
-        if enableSymbol1 and s1_bull_oldestIdx == -1
-            if detectBullishSMT(cycle90.mainLow, prevCycle.mainLow, cycle90.s1Low, prevCycle.s1Low)
-                s1_bull_oldestIdx := i
-        
-        // Check Symbol 2 - Bearish SMT (highs) - find oldest
-        if enableSymbol2 and s2_bear_oldestIdx == -1
-            if detectBearishSMT(cycle90.mainHigh, prevCycle.mainHigh, cycle90.s2High, prevCycle.s2High)
-                s2_bear_oldestIdx := i
-        
-        // Check Symbol 2 - Bullish SMT (lows) - find oldest
-        if enableSymbol2 and s2_bull_oldestIdx == -1
-            if detectBullishSMT(cycle90.mainLow, prevCycle.mainLow, cycle90.s2Low, prevCycle.s2Low)
-                s2_bull_oldestIdx := i
-    
-    // Draw/update lines for the longest SMT divergences found
-    if enableSymbol1 and s1_bear_oldestIdx >= 0
-        prevCycle = array.get(prevCycles90, s1_bear_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol1) + " 90"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainHighBar, prevCycle.mainHigh, cycle90.mainHighBar, cycle90.mainHigh, labelText, false, activeLine90_s1_bear, activeLabel90_s1_bear)
-        activeLine90_s1_bear := newLine
-        activeLabel90_s1_bear := newLabel
-    else if enableSymbol1 and not na(activeLine90_s1_bear)
-        // No SMT found, clear the line
-        line.delete(activeLine90_s1_bear)
-        label.delete(activeLabel90_s1_bear)
-        activeLine90_s1_bear := na
-        activeLabel90_s1_bear := na
-    
-    if enableSymbol1 and s1_bull_oldestIdx >= 0
-        prevCycle = array.get(prevCycles90, s1_bull_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol1) + " 90"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainLowBar, prevCycle.mainLow, cycle90.mainLowBar, cycle90.mainLow, labelText, true, activeLine90_s1_bull, activeLabel90_s1_bull)
-        activeLine90_s1_bull := newLine
-        activeLabel90_s1_bull := newLabel
-    else if enableSymbol1 and not na(activeLine90_s1_bull)
-        line.delete(activeLine90_s1_bull)
-        label.delete(activeLabel90_s1_bull)
-        activeLine90_s1_bull := na
-        activeLabel90_s1_bull := na
-    
-    if enableSymbol2 and s2_bear_oldestIdx >= 0
-        prevCycle = array.get(prevCycles90, s2_bear_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol2) + " 90"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainHighBar, prevCycle.mainHigh, cycle90.mainHighBar, cycle90.mainHigh, labelText, false, activeLine90_s2_bear, activeLabel90_s2_bear)
-        activeLine90_s2_bear := newLine
-        activeLabel90_s2_bear := newLabel
-    else if enableSymbol2 and not na(activeLine90_s2_bear)
-        line.delete(activeLine90_s2_bear)
-        label.delete(activeLabel90_s2_bear)
-        activeLine90_s2_bear := na
-        activeLabel90_s2_bear := na
-    
-    if enableSymbol2 and s2_bull_oldestIdx >= 0
-        prevCycle = array.get(prevCycles90, s2_bull_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol2) + " 90"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainLowBar, prevCycle.mainLow, cycle90.mainLowBar, cycle90.mainLow, labelText, true, activeLine90_s2_bull, activeLabel90_s2_bull)
-        activeLine90_s2_bull := newLine
-        activeLabel90_s2_bull := newLabel
-    else if enableSymbol2 and not na(activeLine90_s2_bull)
-        line.delete(activeLine90_s2_bull)
-        label.delete(activeLabel90_s2_bull)
-        activeLine90_s2_bull := na
-        activeLabel90_s2_bull := na
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//                           SMT DETECTION - 30 MIN
-// ═══════════════════════════════════════════════════════════════════════════════
-
-if enable30min and cycle30.active and array.size(prevCycles30) > 0
-    
-    // Track the longest (oldest) SMT divergence for each type
-    int s1_bear_oldestIdx = -1
-    int s1_bull_oldestIdx = -1
-    int s2_bear_oldestIdx = -1
-    int s2_bull_oldestIdx = -1
-    
-    // Loop through all previous cycles from today to find the LONGEST active SMT
-    for i = 0 to array.size(prevCycles30) - 1
-        prevCycle = array.get(prevCycles30, i)
-        
-        // Check Symbol 1 - Bearish SMT (highs) - find oldest
-        if enableSymbol1 and s1_bear_oldestIdx == -1
-            if detectBearishSMT(cycle30.mainHigh, prevCycle.mainHigh, cycle30.s1High, prevCycle.s1High)
-                s1_bear_oldestIdx := i
-        
-        // Check Symbol 1 - Bullish SMT (lows) - find oldest
-        if enableSymbol1 and s1_bull_oldestIdx == -1
-            if detectBullishSMT(cycle30.mainLow, prevCycle.mainLow, cycle30.s1Low, prevCycle.s1Low)
-                s1_bull_oldestIdx := i
-        
-        // Check Symbol 2 - Bearish SMT (highs) - find oldest
-        if enableSymbol2 and s2_bear_oldestIdx == -1
-            if detectBearishSMT(cycle30.mainHigh, prevCycle.mainHigh, cycle30.s2High, prevCycle.s2High)
-                s2_bear_oldestIdx := i
-        
-        // Check Symbol 2 - Bullish SMT (lows) - find oldest
-        if enableSymbol2 and s2_bull_oldestIdx == -1
-            if detectBullishSMT(cycle30.mainLow, prevCycle.mainLow, cycle30.s2Low, prevCycle.s2Low)
-                s2_bull_oldestIdx := i
-    
-    // Draw/update lines for the longest SMT divergences found
-    if enableSymbol1 and s1_bear_oldestIdx >= 0
-        prevCycle = array.get(prevCycles30, s1_bear_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol1) + " 30"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainHighBar, prevCycle.mainHigh, cycle30.mainHighBar, cycle30.mainHigh, labelText, false, activeLine30_s1_bear, activeLabel30_s1_bear)
-        activeLine30_s1_bear := newLine
-        activeLabel30_s1_bear := newLabel
-    else if enableSymbol1 and not na(activeLine30_s1_bear)
-        line.delete(activeLine30_s1_bear)
-        label.delete(activeLabel30_s1_bear)
-        activeLine30_s1_bear := na
-        activeLabel30_s1_bear := na
-    
-    if enableSymbol1 and s1_bull_oldestIdx >= 0
-        prevCycle = array.get(prevCycles30, s1_bull_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol1) + " 30"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainLowBar, prevCycle.mainLow, cycle30.mainLowBar, cycle30.mainLow, labelText, true, activeLine30_s1_bull, activeLabel30_s1_bull)
-        activeLine30_s1_bull := newLine
-        activeLabel30_s1_bull := newLabel
-    else if enableSymbol1 and not na(activeLine30_s1_bull)
-        line.delete(activeLine30_s1_bull)
-        label.delete(activeLabel30_s1_bull)
-        activeLine30_s1_bull := na
-        activeLabel30_s1_bull := na
-    
-    if enableSymbol2 and s2_bear_oldestIdx >= 0
-        prevCycle = array.get(prevCycles30, s2_bear_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol2) + " 30"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainHighBar, prevCycle.mainHigh, cycle30.mainHighBar, cycle30.mainHigh, labelText, false, activeLine30_s2_bear, activeLabel30_s2_bear)
-        activeLine30_s2_bear := newLine
-        activeLabel30_s2_bear := newLabel
-    else if enableSymbol2 and not na(activeLine30_s2_bear)
-        line.delete(activeLine30_s2_bear)
-        label.delete(activeLabel30_s2_bear)
-        activeLine30_s2_bear := na
-        activeLabel30_s2_bear := na
-    
-    if enableSymbol2 and s2_bull_oldestIdx >= 0
-        prevCycle = array.get(prevCycles30, s2_bull_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol2) + " 30"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainLowBar, prevCycle.mainLow, cycle30.mainLowBar, cycle30.mainLow, labelText, true, activeLine30_s2_bull, activeLabel30_s2_bull)
-        activeLine30_s2_bull := newLine
-        activeLabel30_s2_bull := newLabel
-    else if enableSymbol2 and not na(activeLine30_s2_bull)
-        line.delete(activeLine30_s2_bull)
-        label.delete(activeLabel30_s2_bull)
-        activeLine30_s2_bull := na
-        activeLabel30_s2_bull := na
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//                           SMT DETECTION - 10 MIN
-// ═══════════════════════════════════════════════════════════════════════════════
-
-if enable10min and cycle10.active and array.size(prevCycles10) > 0
-    
-    // Track the longest (oldest) SMT divergence for each type
-    int s1_bear_oldestIdx = -1
-    int s1_bull_oldestIdx = -1
-    int s2_bear_oldestIdx = -1
-    int s2_bull_oldestIdx = -1
-    
-    // Loop through all previous cycles from today to find the LONGEST active SMT
-    for i = 0 to array.size(prevCycles10) - 1
-        prevCycle = array.get(prevCycles10, i)
-        
-        // Check Symbol 1 - Bearish SMT (highs) - find oldest
-        if enableSymbol1 and s1_bear_oldestIdx == -1
-            if detectBearishSMT(cycle10.mainHigh, prevCycle.mainHigh, cycle10.s1High, prevCycle.s1High)
-                s1_bear_oldestIdx := i
-        
-        // Check Symbol 1 - Bullish SMT (lows) - find oldest
-        if enableSymbol1 and s1_bull_oldestIdx == -1
-            if detectBullishSMT(cycle10.mainLow, prevCycle.mainLow, cycle10.s1Low, prevCycle.s1Low)
-                s1_bull_oldestIdx := i
-        
-        // Check Symbol 2 - Bearish SMT (highs) - find oldest
-        if enableSymbol2 and s2_bear_oldestIdx == -1
-            if detectBearishSMT(cycle10.mainHigh, prevCycle.mainHigh, cycle10.s2High, prevCycle.s2High)
-                s2_bear_oldestIdx := i
-        
-        // Check Symbol 2 - Bullish SMT (lows) - find oldest
-        if enableSymbol2 and s2_bull_oldestIdx == -1
-            if detectBullishSMT(cycle10.mainLow, prevCycle.mainLow, cycle10.s2Low, prevCycle.s2Low)
-                s2_bull_oldestIdx := i
-    
-    // Draw/update lines for the longest SMT divergences found
-    if enableSymbol1 and s1_bear_oldestIdx >= 0
-        prevCycle = array.get(prevCycles10, s1_bear_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol1) + " 10"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainHighBar, prevCycle.mainHigh, cycle10.mainHighBar, cycle10.mainHigh, labelText, false, activeLine10_s1_bear, activeLabel10_s1_bear)
-        activeLine10_s1_bear := newLine
-        activeLabel10_s1_bear := newLabel
-    else if enableSymbol1 and not na(activeLine10_s1_bear)
-        line.delete(activeLine10_s1_bear)
-        label.delete(activeLabel10_s1_bear)
-        activeLine10_s1_bear := na
-        activeLabel10_s1_bear := na
-    
-    if enableSymbol1 and s1_bull_oldestIdx >= 0
-        prevCycle = array.get(prevCycles10, s1_bull_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol1) + " 10"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainLowBar, prevCycle.mainLow, cycle10.mainLowBar, cycle10.mainLow, labelText, true, activeLine10_s1_bull, activeLabel10_s1_bull)
-        activeLine10_s1_bull := newLine
-        activeLabel10_s1_bull := newLabel
-    else if enableSymbol1 and not na(activeLine10_s1_bull)
-        line.delete(activeLine10_s1_bull)
-        label.delete(activeLabel10_s1_bull)
-        activeLine10_s1_bull := na
-        activeLabel10_s1_bull := na
-    
-    if enableSymbol2 and s2_bear_oldestIdx >= 0
-        prevCycle = array.get(prevCycles10, s2_bear_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol2) + " 10"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainHighBar, prevCycle.mainHigh, cycle10.mainHighBar, cycle10.mainHigh, labelText, false, activeLine10_s2_bear, activeLabel10_s2_bear)
-        activeLine10_s2_bear := newLine
-        activeLabel10_s2_bear := newLabel
-    else if enableSymbol2 and not na(activeLine10_s2_bear)
-        line.delete(activeLine10_s2_bear)
-        label.delete(activeLabel10_s2_bear)
-        activeLine10_s2_bear := na
-        activeLabel10_s2_bear := na
-    
-    if enableSymbol2 and s2_bull_oldestIdx >= 0
-        prevCycle = array.get(prevCycles10, s2_bull_oldestIdx)
-        labelText = "SMT-" + getSymbolAbbr(symbol2) + " 10"
-        [newLine, newLabel] = drawOrUpdateSMT(prevCycle.mainLowBar, prevCycle.mainLow, cycle10.mainLowBar, cycle10.mainLow, labelText, true, activeLine10_s2_bull, activeLabel10_s2_bull)
-        activeLine10_s2_bull := newLine
-        activeLabel10_s2_bull := newLabel
-    else if enableSymbol2 and not na(activeLine10_s2_bull)
-        line.delete(activeLine10_s2_bull)
-        label.delete(activeLabel10_s2_bull)
-        activeLine10_s2_bull := na
-        activeLabel10_s2_bull := na
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//                              ALERT CONDITIONS (DISABLED FOR NOW)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Alerts removed temporarily due to const string requirement in Pine Script v6
+processSMT(cycle90, prevCycles90, activeLines90, activeLabels90, "90")
+processSMT(cycle30, prevCycles30, activeLines30, activeLabels30, "30")
+processSMT(cycle10, prevCycles10, activeLines10, activeLabels10, "10")
+if isValidTimeframeFor3Min
+    processSMT(cycle3, prevCycles3, activeLines3, activeLabels3, "3")
