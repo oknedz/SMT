@@ -161,14 +161,14 @@ drawOrUpdateSMT(mainBar, mainPrice, compBar, compPrice, labelText, activeLine, a
             label.delete(activeLabel)
         newLine := line.new(mainBar, mainPrice, compBar, compPrice, color=color.black, width=1, style=line.style_solid)
         
-        // Calculate center position of the line
-        centerBar = math.round((mainBar + compBar) / 2)
-        centerPrice = (mainPrice + compPrice) / 2
+        // Position label on the right side of the line (rightmost bar)
+        labelBar = math.max(mainBar, compBar)
+        labelPrice = mainBar > compBar ? mainPrice : compPrice
         
-        // Position label above line for bearish, below line for bullish
-        labelStyle = isBearish ? label.style_label_down : label.style_label_up
+        // Position text above price for bearish, below price for bullish
+        textYloc = isBearish ? yloc.abovebar : yloc.belowbar
         
-        newLabel := label.new(centerBar, centerPrice, labelText, style=labelStyle, color=color.black, textcolor=color.white, size=size.small, yloc=yloc.price, xloc=xloc.bar_index)
+        newLabel := label.new(labelBar, labelPrice, labelText, style=label.style_none, color=color.black, textcolor=color.black, size=size.small, yloc=textYloc, xloc=xloc.bar_index)
     [newLine, newLabel]
 
 // ═══════════════════════════════════════════════════════════════════════════════
