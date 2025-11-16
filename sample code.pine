@@ -1,0 +1,921 @@
+// This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
+// © LuxAlgo
+
+//@version=5
+indicator("SMT Divergences [LuxAlgo]", "LuxAlgo - SMT Divergences", overlay = true, max_lines_count = 500, max_labels_count = 500)
+//------------------------------------------------------------------------------
+//Settings
+//-----------------------------------------------------------------------------{
+length = input.int(3, 'Pivot Lookback', minval = 2)
+
+//Symbol A
+useSym1 = input(true, 'Comparison Symbol', inline = 'symA')
+sym1    = input.symbol('CME_MINI_DL:ES1!', '', inline = 'symA')
+
+//Symbol B
+useSym2 = input(true, 'Comparison Symbol', inline = 'symB')
+sym2   = input.symbol('CBOT_MINI_DL:YM1!', '', inline = 'symB')
+
+//Style
+bullDivCss = input.color(#ff1100, 'Swing High', group = 'Style')
+bearDivCss = input.color(#2157f3, 'Swing Low', group = 'Style')
+
+//Dashboard
+showDash = input(false, 'Show Dashboard'                                                               , group = 'Dashboard')
+dashLoc  = input.string('Top Right', 'Location', options = ['Top Right', 'Bottom Right', 'Bottom Left'], group = 'Dashboard')
+textSize = input.string('Small', 'Size'        , options = ['Tiny', 'Small', 'Normal']                 , group = 'Dashboard')
+
+//-----------------------------------------------------------------------------}
+//Function
+//-----------------------------------------------------------------------------{
+n = bar_index
+
+get_hl() => [high, low, close]
+
+//Swing highs divergences
+get_divergence(ph, y2, sym_y2, css)=>
+    var float y1 = na
+    var float sym_y1 = na
+    var int x1 = na
+    var smt = 0
+
+    if y2 != y2[1] and sym_y2 != sym_y2[1] 
+        //Test for SMT
+        if (y2 - y1) * (sym_y2 - sym_y1) < 0
+            line.new(n[length], y2, x1, y1, color = css)
+
+            smt += 1
+        
+        sym_y1 := sym_y2
+        y1 := y2
+        x1 := n[length]
+    else if (ph and y2 > y2[1]) or (not ph and y2 < y2[1]) 
+        sym_y1 := na
+        y1 := y2
+        x1 := n[length]
+    
+    smt
+
+//-----------------------------------------------------------------------------}
+//Main variables
+//-----------------------------------------------------------------------------{
+var phN = 0, var plN = 0
+var ph_smt1 = 0.
+var pl_smt1 = 0.
+var ph_smt2 = 0.
+var pl_smt2 = 0.
+
+ticker1 = syminfo.ticker(sym1)
+ticker2 = syminfo.ticker(sym2)
+
+//-----------------------------------------------------------------------------}
+//Detect swing highs/lows and divergences
+//-----------------------------------------------------------------------------{
+ph = fixnan(ta.pivothigh(length, length))
+pl = fixnan(ta.pivotlow(length, length))
+phN += ph != ph[1] ? 1 : 0
+plN += pl != pl[1] ? 1 : 0
+
+//Comparison symbol pivots
+[h1, l1, c1] = request.security(sym1, timeframe.period, get_hl())
+[h2, l2, c2] = request.security(sym2, timeframe.period, get_hl())
+
+//Detect swing high divergences
+if useSym1
+    sym_ph1 = fixnan(ta.pivothigh(h1, length, length))
+    sym_pl1 = fixnan(ta.pivotlow(l1, length, length))
+
+    ph_smt1 := get_divergence(true, ph, sym_ph1, bullDivCss)
+    pl_smt1 := get_divergence(false, pl, sym_pl1, bearDivCss)
+
+if useSym2
+    sym_ph2 = fixnan(ta.pivothigh(h2, length, length))
+    sym_pl2 = fixnan(ta.pivotlow(l2, length, length))
+    
+    ph_smt2 := get_divergence(true, ph, sym_ph2, bullDivCss)
+    pl_smt2 := get_divergence(false, pl, sym_pl2, bearDivCss)
+
+txt = ''
+if ph != ph[1]
+    if ph_smt1 > ph_smt1[1]
+        txt += ticker1
+    if ph_smt2 > ph_smt2[1]
+        txt += txt != '' ? ' | ' : ''
+        txt += ticker2
+
+    if txt != ''
+        label.new(n[length], ph, txt
+          , color = bullDivCss
+          , style = label.style_label_down
+          , textcolor = color.white
+          , size = size.tiny)
+else
+    if pl_smt1 > pl_smt1[1]
+        txt += ticker1
+    if pl_smt2 > pl_smt2[1]
+        txt += txt != '' ? ' | ' : ''
+        txt += ticker2
+
+    if txt != ''
+        label.new(n[length], pl, txt
+          , color = bearDivCss
+          , style = label.style_label_up
+          , textcolor = color.white
+          , size = size.tiny)
+    
+//-----------------------------------------------------------------------------}
+//Tables
+//-----------------------------------------------------------------------------{
+var table_position = dashLoc == 'Bottom Left' ? position.bottom_left 
+  : dashLoc == 'Top Right' ? position.top_right 
+  : position.bottom_right
+
+var table_size = textSize == 'Tiny' ? size.tiny 
+  : textSize == 'Small' ? size.small 
+  : size.normal
+
+var tb = table.new(table_position, 3, 3
+  , bgcolor = #1e222d
+  , border_color = #373a46
+  , border_width = 1
+  , frame_color = #373a46
+  , frame_width = 1)
+
+if barstate.isfirst and showDash
+    tb.cell(1, 0, 'Swing High', text_color = color.white)
+    tb.cell(2, 0, 'Swing Low', text_color = color.white)
+    
+    tb.cell(0, 1, ticker1, text_color = color.white)
+    tb.cell(0, 2, ticker2, text_color = color.white)
+
+if barstate.islast and showDash
+    //Symbol 1
+    tb.cell(1, 1, str.format('{0} ({1, number, percent})', ph_smt1, ph_smt1 / phN)
+      , text_color = bullDivCss)
+    tb.cell(2, 1, str.format('{0} ({1, number, percent})', pl_smt1, pl_smt1 / plN)
+      , text_color = bearDivCss)
+    
+    //Symbol 2
+    tb.cell(1, 2, str.format('{0} ({1, number, percent})', ph_smt2, ph_smt2 / phN)
+      , text_color = bullDivCss)
+    tb.cell(2, 2, str.format('{0} ({1, number, percent})', pl_smt2, pl_smt2 / plN)
+      , text_color = bearDivCss)
+
+//-----------------------------------------------------------------------------}
+
+
+
+
+
+//@version=6
+indicator("Time Cycles v1.0", shorttitle="Time-Cycles [StoneFace]", overlay=true, max_boxes_count=500)
+
+// Timeframe validation
+tf_minutes = timeframe.in_seconds() / 60
+is_valid_tf = tf_minutes <= 240 // Only show on timeframes 4H and below
+show_warning = tf_minutes > 240
+
+// Input groups for enabling/disabling cycle types
+show_90min = input.bool(true, "90-min Cycles", group="Cycle Groups")
+show_30min = input.bool(true, "30-min Cycles", group="Cycle Groups") 
+show_10min = input.bool(false, "10-min Cycles", group="Cycle Groups")
+
+// Pivot lines for 90min cycles
+show_90min_pivots = input.bool(true, "90min Pivot Lines", group="90min Pivots", tooltip="Draw pivot lines from 90min cycle highs/lows that extend until price crosses them")
+pivot_line_style = input.string("Solid", "Pivot Line Style", options=["Solid", "Dashed", "Dotted"], group="90min Pivots")
+pivot_line_width = input.int(1, "Pivot Line Width", minval=1, maxval=3, group="90min Pivots")
+
+// Auto-adjust cycle display based on timeframe
+auto_adjust_cycles = input.bool(true, "Auto-adjust for Timeframe", group="Display Settings")
+actual_show_90min = auto_adjust_cycles ? (tf_minutes <= 240 and show_90min) : show_90min
+actual_show_30min = auto_adjust_cycles ? (tf_minutes <= 60 and show_30min) : show_30min  
+actual_show_10min = auto_adjust_cycles ? (tf_minutes <= 30 and show_10min) : show_10min
+
+// Color settings
+color_90min_a = input.color(color.red, "90-min A", group="Colors", inline="90")
+color_90min_m = input.color(color.blue, "M", group="Colors", inline="90")
+color_90min_d = input.color(color.green, "D", group="Colors", inline="90")
+color_30min = input.color(color.gray, "30-min Cycles", group="Colors")
+color_10min = input.color(color.new(color.gray, 80), "10-min Cycles", group="Colors")
+color_london_open = input.color(color.orange, "London Opening", group="Colors")
+color_asia = input.color(color.purple, "Asia Session", group="Colors")
+
+// Opening price line settings
+show_midnight = input.bool(false, "Midnight (00:00)", group="Opening Lines")
+midnight_color = input.color(color.black, "Color", group="Opening Lines", inline="midnight_style")
+midnight_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Opening Lines", inline="midnight_style")
+
+show_830 = input.bool(false, "8:30 Opening", group="Opening Lines")
+color_830 = input.color(color.black, "Color", group="Opening Lines", inline="830_style")
+style_830 = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Opening Lines", inline="830_style")
+
+show_930 = input.bool(false, "9:30 Opening", group="Opening Lines")
+color_930 = input.color(color.black, "Color", group="Opening Lines", inline="930_style")
+style_930 = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Opening Lines", inline="930_style")
+
+
+// Asia session line settings
+show_asia_labels = input.bool(true, "Labels", group="Asia Session")
+asia_line_style = input.string(line.style_solid, "Line Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Asia Session")
+
+// Previous period High/Low line settings
+show_prev_day = input.bool(false, "Previous Day H/L", group="Previous Day")
+prev_day_color = input.color(color.gray, "Color", group="Previous Day", inline="prevday_style")
+prev_day_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Previous Day", inline="prevday_style")
+show_prev_day_labels = input.bool(true, "Labels", group="Previous Day")
+
+show_prev_week = input.bool(false, "Previous Week H/L", group="Previous Week")
+prev_week_color = input.color(color.blue, "Color", group="Previous Week", inline="prevweek_style")
+prev_week_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Previous Week", inline="prevweek_style")
+show_prev_week_labels = input.bool(true, "Labels", group="Previous Week")
+
+show_prev_month = input.bool(false, "Previous Month H/L", group="Previous Month")
+prev_month_color = input.color(color.orange, "Color", group="Previous Month", inline="prevmonth_style")
+prev_month_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Previous Month", inline="prevmonth_style")
+show_prev_month_labels = input.bool(true, "Labels", group="Previous Month")
+
+// Box transparency
+box_transp = input.int(93, "Box Transparency", minval=0, maxval=100, group="Display Settings")
+
+// Helper function to convert time string to timestamp in NY timezone
+time_to_timestamp(h, m) =>
+    ny_year = year(time, "America/New_York")
+    ny_month = month(time, "America/New_York") 
+    ny_day = dayofmonth(time, "America/New_York")
+    timestamp("America/New_York", ny_year, ny_month, ny_day, h, m, 0)
+
+// === 90MIN PIVOT LINES TRACKING ===
+// Arrays to store active pivot lines for 90min cycles
+var array<line> active_high_lines = array.new<line>()
+var array<line> active_low_lines = array.new<line>()
+
+// Function to update pivot lines - check for price crosses and extend/delete accordingly
+update_pivot_lines() =>
+    if show_90min_pivots
+        // Update high pivot lines - only if array has elements
+        if array.size(active_high_lines) > 0
+            for i = array.size(active_high_lines) - 1 to 0
+                pivot_line = array.get(active_high_lines, i)
+                if not na(pivot_line)
+                    line_price = line.get_y2(pivot_line)
+                    // If price crosses above the high pivot, stop the line here
+                    if high >= line_price
+                        line.set_x2(pivot_line, bar_index)
+                        array.remove(active_high_lines, i)
+                    
+                    // Extend line to current bar if still active
+                    if high < line_price
+                        line.set_x2(pivot_line, bar_index + 1)
+        
+        // Update low pivot lines - only if array has elements
+        if array.size(active_low_lines) > 0
+            for i = array.size(active_low_lines) - 1 to 0
+                pivot_line = array.get(active_low_lines, i)
+                if not na(pivot_line)
+                    line_price = line.get_y2(pivot_line)
+                    // If price crosses below the low pivot, stop the line here
+                    if low <= line_price
+                        line.set_x2(pivot_line, bar_index)
+                        array.remove(active_low_lines, i)
+                    
+                    // Extend line to current bar if still active
+                    if low > line_price
+                        line.set_x2(pivot_line, bar_index + 1)
+
+// Function to add new pivot lines when 90min cycle completes - only for current date
+add_90min_pivot_lines(cycle_high, cycle_low, cycle_end_bar, line_color) =>
+    if show_90min_pivots
+        // More robust current date check using full timestamp comparison
+        current_ny_year = year(time, "America/New_York")
+        current_ny_month = month(time, "America/New_York")
+        current_ny_day = dayofmonth(time, "America/New_York")
+        
+        cycle_ny_year = year(time[bar_index - cycle_end_bar], "America/New_York")
+        cycle_ny_month = month(time[bar_index - cycle_end_bar], "America/New_York")
+        cycle_ny_day = dayofmonth(time[bar_index - cycle_end_bar], "America/New_York")
+        
+        // Check if cycle completed today (same year, month, and day)
+        is_current_date = current_ny_year == cycle_ny_year and current_ny_month == cycle_ny_month and current_ny_day == cycle_ny_day
+        
+        if is_current_date
+            // Get line style
+            line_style = switch pivot_line_style
+                "Solid" => line.style_solid
+                "Dashed" => line.style_dashed  
+                "Dotted" => line.style_dotted
+                => line.style_solid
+            
+            // Create high pivot line
+            high_line = line.new(x1=cycle_end_bar, y1=cycle_high, x2=cycle_end_bar + 1, y2=cycle_high, extend=extend.none, color=color.new(line_color, 0), style=line_style, width=pivot_line_width)
+            array.push(active_high_lines, high_line)
+            
+            // Create low pivot line
+            low_line = line.new(x1=cycle_end_bar, y1=cycle_low, x2=cycle_end_bar + 1, y2=cycle_low, extend=extend.none, color=color.new(line_color, 0), style=line_style, width=pivot_line_width)
+            array.push(active_low_lines, low_line)
+            
+            // Limit number of active lines (keep last 10 of each type for performance)
+            if array.size(active_high_lines) > 10
+                old_line = array.shift(active_high_lines)
+                if not na(old_line)
+                    line.delete(old_line)
+                    
+            if array.size(active_low_lines) > 10
+                old_line = array.shift(active_low_lines)
+                if not na(old_line)
+                    line.delete(old_line)
+
+// Function for Asia session using NY timezone (to keep consistency)
+time_to_timestamp_simple(h, m) =>
+    ny_year = year(time, "America/New_York")
+    ny_month = month(time, "America/New_York") 
+    ny_day = dayofmonth(time, "America/New_York")
+    timestamp("America/New_York", ny_year, ny_month, ny_day, h, m, 0)
+
+// Function to create previous period High/Low lines
+create_prev_period_lines(show_lines, show_labels, line_color, line_style, period_type) =>
+    if show_lines and is_valid_tf
+        var line prev_high_line = na
+        var line prev_low_line = na
+        var label prev_high_label = na
+        var label prev_low_label = na
+        
+        // Track previous period high/low manually using NY timezone boundaries
+        var float prev_day_high_val = na
+        var float prev_day_low_val = na
+        var float prev_week_high_val = na
+        var float prev_week_low_val = na
+        var float prev_month_high_val = na
+        var float prev_month_low_val = na
+        var float current_day_high = na
+        var float current_day_low = na
+        var float current_week_high = na
+        var float current_week_low = na
+        var float current_month_high = na
+        var float current_month_low = na
+        
+        // NY timezone time components
+        ny_hour = hour(time, "America/New_York")
+        ny_minute = minute(time, "America/New_York")
+        ny_dayofweek = dayofweek(time, "America/New_York")
+        ny_dayofmonth = dayofmonth(time, "America/New_York")
+        
+        // Detect NY timezone boundaries
+        is_new_ny_day = ny_hour == 0 and ny_minute == 0
+        is_new_ny_week = is_new_ny_day and ny_dayofweek == dayofweek.monday
+        is_new_ny_month = is_new_ny_day and ny_dayofmonth == 1
+        
+        // Initialize or update current period tracking
+        if na(current_day_high) or is_new_ny_day
+            current_day_high := high
+            current_day_low := low
+        else
+            current_day_high := math.max(current_day_high, high)
+            current_day_low := math.min(current_day_low, low)
+            
+        if na(current_week_high) or is_new_ny_week
+            current_week_high := high
+            current_week_low := low
+        else
+            current_week_high := math.max(current_week_high, high)
+            current_week_low := math.min(current_week_low, low)
+            
+        if na(current_month_high) or is_new_ny_month
+            current_month_high := high
+            current_month_low := low
+        else
+            current_month_high := math.max(current_month_high, high)
+            current_month_low := math.min(current_month_low, low)
+        
+        // Save previous period values when new period starts
+        if is_new_ny_day
+            prev_day_high_val := current_day_high[1]
+            prev_day_low_val := current_day_low[1]
+        if is_new_ny_week
+            prev_week_high_val := current_week_high[1]
+            prev_week_low_val := current_week_low[1]
+        if is_new_ny_month
+            prev_month_high_val := current_month_high[1]
+            prev_month_low_val := current_month_low[1]
+        
+        // Get values based on period type
+        [prev_high, prev_low] = switch period_type
+            "day" => [prev_day_high_val, prev_day_low_val]
+            "week" => [prev_week_high_val, prev_week_low_val]
+            "month" => [prev_month_high_val, prev_month_low_val]
+            => [na, na]
+        
+        // Create or update lines on new period using NY timezone
+        is_new_period = switch period_type
+            "day" => is_new_ny_day
+            "week" => is_new_ny_week
+            "month" => is_new_ny_month
+            => false
+        
+        if is_new_period and not na(prev_high) and not na(prev_low)
+            // Delete old lines and labels
+            if not na(prev_high_line)
+                line.delete(prev_high_line)
+                line.delete(prev_low_line)
+            if show_labels and not na(prev_high_label)
+                label.delete(prev_high_label)
+                label.delete(prev_low_label)
+            
+            // Create new extending lines to current bar
+            prev_high_line := line.new(x1=bar_index, y1=prev_high, x2=bar_index, y2=prev_high, color=line_color, style=line_style, width=1, extend=extend.none)
+            prev_low_line := line.new(x1=bar_index, y1=prev_low, x2=bar_index, y2=prev_low, color=line_color, style=line_style, width=1, extend=extend.none)
+            
+            // Create labels with fixed time position (won't move with zoom)
+            if show_labels
+                label_text_high = period_type == "day" ? "PDH" : period_type == "week" ? "PWH" : "PMH"
+                label_text_low = period_type == "day" ? "PDL" : period_type == "week" ? "PWL" : "PML"
+                // Use time-based positioning with slight offset to position at line end
+                label_time = time + (timeframe.in_seconds() * 1000 * 5) // +5 bars worth of time
+                prev_high_label := label.new(x=label_time, y=prev_high, text=label_text_high, color=color.new(color.white, 100), textcolor=line_color, style=label.style_label_left, size=size.small, xloc=xloc.bar_time)
+                prev_low_label := label.new(x=label_time, y=prev_low, text=label_text_low, color=color.new(color.white, 100), textcolor=line_color, style=label.style_label_left, size=size.small, xloc=xloc.bar_time)
+        
+        // Update existing lines to extend to current bar
+        if not na(prev_high_line) and not na(prev_low_line)
+            line.set_x2(prev_high_line, bar_index)
+            line.set_x2(prev_low_line, bar_index)
+            // Update label positions using time-based positioning (fixed, won't move with zoom)
+            if show_labels and not na(prev_high_label) and not na(prev_low_label)
+                label_time = time + (timeframe.in_seconds() * 1000 * 5) // +5 bars worth of time
+                label.set_xloc(prev_high_label, label_time, xloc.bar_time)
+                label.set_xloc(prev_low_label, label_time, xloc.bar_time)
+
+// Function to create opening price lines extended to 16:00 with time labels
+create_opening_line(open_h, open_m, line_color, line_style, time_label) =>
+    if not is_valid_tf
+        false
+    else
+        open_time = time_to_timestamp(open_h, open_m)
+        end_time = time_to_timestamp(16, 0)
+        
+        var float opening_price = na
+        var line current_line = na
+        var label time_label_obj = na
+        var bool line_active = false
+        
+        // Capture opening price
+        if time == open_time and not line_active
+            opening_price := open
+            line_active := true
+            current_line := line.new(x1=bar_index, y1=opening_price, x2=bar_index, y2=opening_price, color=line_color, style=line_style, width=1, extend=extend.none)
+            time_label_obj := label.new(x=bar_index, y=opening_price, text=time_label, color=color.new(color.white, 100), textcolor=line_color, style=label.style_label_left, size=size.small)
+        
+        // Extend line and update label position during trading hours
+        if line_active and time < end_time and not na(current_line)
+            line.set_x2(current_line, bar_index)
+            if not na(time_label_obj)
+                label.set_x(time_label_obj, bar_index)
+        
+        // Deactivate line after 16:00
+        if line_active and time >= end_time
+            line_active := false
+        
+        true
+
+// === 9:30 OPENING RANGE GAP ===
+// Variables to track gap box and mid line
+var box current_gap_box = na
+var line current_gap_midline = na
+var float yesterday_close = na
+var float today_open = na
+var bool gap_box_active = false
+
+// SMT detection functions removed
+
+// Function to create box if within time range - with real-time updates
+create_cycle_box(start_h, start_m, end_h, end_m, box_color, cycle_name) =>
+    if not is_valid_tf
+        false
+    else
+        // Declare variables first
+        start_time = 0
+        end_time = 0
+        
+        // All calculations use NY timezone
+        start_time := time_to_timestamp(start_h, start_m)
+        end_time := time_to_timestamp(end_h, end_m)
+        
+        // Handle overnight sessions (Asia) - spans to next NY day
+        if end_h < start_h
+            // For overnight sessions, end time is next NY day
+            ny_year = year(time, "America/New_York")
+            ny_month = month(time, "America/New_York") 
+            ny_day = dayofmonth(time, "America/New_York")
+            end_time := timestamp("America/New_York", ny_year, ny_month, ny_day + 1, end_h, end_m, 0)
+        
+        var float session_high = na
+        var float session_low = na
+        var int session_start_bar = na
+        var bool session_active = false
+        var box current_box = na
+        
+        in_session = time >= start_time and time < end_time
+        
+        // Session start
+        if in_session and not session_active
+            session_high := high
+            session_low := low
+            session_start_bar := bar_index
+            session_active := true
+            // Create initial box
+            current_box := box.new(left=session_start_bar, top=session_high, right=bar_index, bottom=session_low, bgcolor=color.new(box_color, box_transp), border_width=0, extend=extend.none)
+            if barstate.isconfirmed
+                log.info("Started " + cycle_name + " at " + str.tostring(time, "yyyy-MM-dd HH:mm") + " Start: " + str.tostring(start_time) + " End: " + str.tostring(end_time))
+        
+        // Update box during session
+        if session_active and in_session and not na(current_box)
+            session_high := math.max(session_high, high)
+            session_low := math.min(session_low, low)
+            // Update box dimensions and extend to current bar
+            box.set_top(current_box, session_high)
+            box.set_bottom(current_box, session_low)
+            box.set_right(current_box, bar_index)
+        
+        // Session end - finalize box
+        if session_active and not in_session and not na(session_start_bar)
+            if not na(current_box)
+                // Final update to box
+                box.set_right(current_box, bar_index-1)
+                if tf_minutes <= 60
+                    log.info("Finalized " + cycle_name + " box: " + str.tostring(session_low) + " - " + str.tostring(session_high))
+            
+            // Reset for next session
+            session_high := na
+            session_low := na
+            session_start_bar := na
+            session_active := false
+            current_box := na
+        
+        true
+
+// Enhanced cycle box function for 90min cycles with pivot lines
+create_90min_cycle_box_with_pivots(start_h, start_m, end_h, end_m, box_color, cycle_name) =>
+    if not is_valid_tf
+        false
+    else
+        // Declare variables first
+        start_time = 0
+        end_time = 0
+        
+        // All calculations use NY timezone
+        start_time := time_to_timestamp(start_h, start_m)
+        end_time := time_to_timestamp(end_h, end_m)
+        
+        // Handle overnight sessions (Asia) - spans to next NY day
+        if end_h < start_h
+            // For overnight sessions, end time is next NY day
+            ny_year = year(time, "America/New_York")
+            ny_month = month(time, "America/New_York") 
+            ny_day = dayofmonth(time, "America/New_York")
+            end_time := timestamp("America/New_York", ny_year, ny_month, ny_day + 1, end_h, end_m, 0)
+        
+        var float session_high = na
+        var float session_low = na
+        var int session_start_bar = na
+        var bool session_active = false
+        var box current_box = na
+        
+        in_session = time >= start_time and time < end_time
+        
+        // Session start
+        if in_session and not session_active
+            session_high := high
+            session_low := low
+            session_start_bar := bar_index
+            session_active := true
+            
+            // Create initial box
+            current_box := box.new(left=session_start_bar, top=session_high, right=bar_index, bottom=session_low, bgcolor=color.new(box_color, box_transp), border_width=0, extend=extend.none)
+            if barstate.isconfirmed
+                log.info("Started " + cycle_name + " at " + str.tostring(time, "yyyy-MM-dd HH:mm") + " Start: " + str.tostring(start_time) + " End: " + str.tostring(end_time))
+        
+        // Update box during session
+        if session_active and in_session and not na(current_box)
+            session_high := math.max(session_high, high)
+            session_low := math.min(session_low, low)
+            
+            // Update box dimensions and extend to current bar
+            box.set_top(current_box, session_high)
+            box.set_bottom(current_box, session_low)
+            box.set_right(current_box, bar_index)
+        
+        // Session end - finalize box and create pivot lines
+        if session_active and not in_session and not na(session_start_bar)
+            if not na(current_box)
+                // Final update to box
+                box.set_right(current_box, bar_index-1)
+                if tf_minutes <= 60
+                    log.info("Finalized " + cycle_name + " box: " + str.tostring(session_low) + " - " + str.tostring(session_high))
+            
+            // Create pivot lines for this completed 90min cycle
+            if barstate.isconfirmed
+                add_90min_pivot_lines(session_high, session_low, bar_index-1, box_color)
+            
+            // Reset for next session
+            session_high := na
+            session_low := na
+            session_start_bar := na
+            session_active := false
+            current_box := na
+        
+        true
+
+// Old SMT cycle function removed
+
+// SMT data processing section removed
+
+
+// Clean up previous day's pivot lines and update current ones
+if is_valid_tf and show_90min_pivots
+    // Get current NY date for comparison
+    current_ny_year = year(time, "America/New_York")
+    current_ny_month = month(time, "America/New_York")
+    current_ny_day = dayofmonth(time, "America/New_York")
+    ny_hour = hour(time, "America/New_York")
+    ny_minute = minute(time, "America/New_York")
+    
+    // Aggressive cleanup - remove any lines that aren't from today
+    if array.size(active_high_lines) > 0 or array.size(active_low_lines) > 0
+        // Check if we need to clean up old lines (not just at midnight)
+        should_cleanup = false
+        
+        // Check if it's a new day or we have any old lines
+        if array.size(active_high_lines) > 0
+            first_high_line = array.get(active_high_lines, 0)
+            if not na(first_high_line)
+                line_bar = line.get_x1(first_high_line)
+                line_time = time[bar_index - line_bar]
+                line_ny_year = year(line_time, "America/New_York")
+                line_ny_month = month(line_time, "America/New_York") 
+                line_ny_day = dayofmonth(line_time, "America/New_York")
+                
+                // If line is from a different date, clean up
+                if line_ny_year != current_ny_year or line_ny_month != current_ny_month or line_ny_day != current_ny_day
+                    should_cleanup := true
+        
+        // Cleanup old lines
+        if should_cleanup or (ny_hour == 0 and ny_minute == 0)
+            // Delete all existing pivot lines
+            if array.size(active_high_lines) > 0
+                for i = array.size(active_high_lines) - 1 to 0
+                    old_line = array.get(active_high_lines, i)
+                    if not na(old_line)
+                        line.delete(old_line)
+                    array.remove(active_high_lines, i)
+                    
+            if array.size(active_low_lines) > 0
+                for i = array.size(active_low_lines) - 1 to 0
+                    old_line = array.get(active_low_lines, i)
+                    if not na(old_line)
+                        line.delete(old_line)
+                    array.remove(active_low_lines, i)
+    
+    // Update existing pivot lines
+    update_pivot_lines()
+
+
+// Only execute if timeframe is valid
+if is_valid_tf
+    // London Opening Range: 0130-0200
+    if actual_show_30min
+        create_cycle_box(1, 30, 2, 0, color_london_open, "London Opening")
+
+    // Asia Session: High/Low lines with labels
+    var float asia_high = na
+    var float asia_low = na
+    var line asia_high_line = na
+    var line asia_low_line = na
+    var label asia_high_label = na
+    var label asia_low_label = na
+    var bool asia_session = false
+    
+    // Check if we're in Asia session time in NY timezone
+    // Asia session: 20:00-00:00 NY time - spans across NY calendar days (overnight)
+    ny_hour = hour(time, "America/New_York")
+    ny_minute = minute(time, "America/New_York")
+    
+    // Asia session detection - handle overnight properly (20:00 to 00:00 next day)
+    is_asia_start = ny_hour == 20 and ny_minute == 0
+    is_asia_end = ny_hour == 0 and ny_minute == 0
+    is_in_asia_session = (ny_hour >= 20 and ny_hour <= 23)
+    
+    // Start Asia session
+    if is_asia_start and not asia_session
+        asia_high := high
+        asia_low := low
+        asia_session := true
+        // Create lines with user-defined style
+        asia_high_line := line.new(x1=bar_index, y1=asia_high, x2=bar_index, y2=asia_high, color=color_asia, style=asia_line_style, width=1, extend=extend.none)
+        asia_low_line := line.new(x1=bar_index, y1=asia_low, x2=bar_index, y2=asia_low, color=color_asia, style=asia_line_style, width=1, extend=extend.none)
+        // Create text labels if enabled
+        if show_asia_labels
+            asia_high_label := label.new(x=bar_index, y=asia_high, text="Asia High", color=color.new(color.white, 100), textcolor=color_asia, style=label.style_label_down, size=size.small)
+            asia_low_label := label.new(x=bar_index, y=asia_low, text="Asia Low", color=color.new(color.white, 100), textcolor=color_asia, style=label.style_label_up, size=size.small)
+    
+    // Update during Asia session
+    if asia_session and is_in_asia_session and not is_asia_end
+        if high > asia_high
+            asia_high := high
+            if not na(asia_high_line)
+                line.set_y1(asia_high_line, asia_high)
+                line.set_y2(asia_high_line, asia_high)
+            if show_asia_labels and not na(asia_high_label)
+                label.set_y(asia_high_label, asia_high)
+        if low < asia_low
+            asia_low := low
+            if not na(asia_low_line)
+                line.set_y1(asia_low_line, asia_low)
+                line.set_y2(asia_low_line, asia_low)
+            if show_asia_labels and not na(asia_low_label)
+                label.set_y(asia_low_label, asia_low)
+        // Extend lines and update label positions to center
+        if not na(asia_high_line)
+            line.set_x2(asia_high_line, bar_index)
+            // Position label at center of line if labels are enabled
+            if show_asia_labels
+                line_start = line.get_x1(asia_high_line)
+                line_center = math.round((line_start + bar_index) / 2)
+                if not na(asia_high_label)
+                    label.set_x(asia_high_label, line_center)
+        if not na(asia_low_line)
+            line.set_x2(asia_low_line, bar_index)
+            // Position label at center of line if labels are enabled
+            if show_asia_labels
+                line_start = line.get_x1(asia_low_line)
+                line_center = math.round((line_start + bar_index) / 2)
+                if not na(asia_low_label)
+                    label.set_x(asia_low_label, line_center)
+    
+    // End Asia session
+    if is_asia_end and asia_session
+        asia_session := false
+
+    // === LONDON SESSION CYCLES ===
+    if actual_show_90min
+        create_90min_cycle_box_with_pivots(2, 30, 4, 0, color_90min_a, "London 90min A")
+        create_90min_cycle_box_with_pivots(4, 0, 5, 30, color_90min_m, "London 90min M") 
+        create_90min_cycle_box_with_pivots(5, 30, 7, 0, color_90min_d, "London 90min D")
+
+    if actual_show_30min
+        create_cycle_box(2, 30, 3, 0, color_30min, "London 30min 1")
+        create_cycle_box(3, 0, 3, 30, color_30min, "London 30min 2")
+        create_cycle_box(3, 30, 4, 0, color_30min, "London 30min 3")
+        create_cycle_box(4, 0, 4, 30, color_30min, "London 30min 4")
+        create_cycle_box(4, 30, 5, 0, color_30min, "London 30min 5")
+        create_cycle_box(5, 0, 5, 30, color_30min, "London 30min 6")
+        create_cycle_box(5, 30, 6, 0, color_30min, "London 30min 7")
+        create_cycle_box(6, 0, 6, 30, color_30min, "London 30min 8")
+        create_cycle_box(6, 30, 7, 0, color_30min, "London 30min 9")
+
+    if actual_show_10min
+        // London Opening Range 10-min cycles
+        create_cycle_box(1, 30, 1, 40, color_10min, "London Open 10min 1")
+        create_cycle_box(1, 40, 1, 50, color_10min, "London Open 10min 2") 
+        create_cycle_box(1, 50, 2, 0, color_10min, "London Open 10min 3")
+        
+        // London session 10-min cycles
+        create_cycle_box(2, 30, 2, 40, color_10min, "London 10min")
+        create_cycle_box(2, 40, 2, 50, color_10min, "London 10min")
+        create_cycle_box(2, 50, 3, 0, color_10min, "London 10min")
+        create_cycle_box(3, 0, 3, 10, color_10min, "London 10min")
+        create_cycle_box(3, 10, 3, 20, color_10min, "London 10min")
+        create_cycle_box(3, 20, 3, 30, color_10min, "London 10min")
+        create_cycle_box(3, 30, 3, 40, color_10min, "London 10min")
+        create_cycle_box(3, 40, 3, 50, color_10min, "London 10min")
+        create_cycle_box(3, 50, 4, 0, color_10min, "London 10min")
+        create_cycle_box(4, 0, 4, 10, color_10min, "London 10min")
+        create_cycle_box(4, 10, 4, 20, color_10min, "London 10min")
+        create_cycle_box(4, 20, 4, 30, color_10min, "London 10min")
+        create_cycle_box(4, 30, 4, 40, color_10min, "London 10min")
+        create_cycle_box(4, 40, 4, 50, color_10min, "London 10min")
+        create_cycle_box(4, 50, 5, 0, color_10min, "London 10min")
+        create_cycle_box(5, 0, 5, 10, color_10min, "London 10min")
+        create_cycle_box(5, 10, 5, 20, color_10min, "London 10min")
+        create_cycle_box(5, 20, 5, 30, color_10min, "London 10min")
+        create_cycle_box(5, 30, 5, 40, color_10min, "London 10min")
+        create_cycle_box(5, 40, 5, 50, color_10min, "London 10min")
+        create_cycle_box(5, 50, 6, 0, color_10min, "London 10min")
+        create_cycle_box(6, 0, 6, 10, color_10min, "London 10min")
+        create_cycle_box(6, 10, 6, 20, color_10min, "London 10min")
+        create_cycle_box(6, 20, 6, 30, color_10min, "London 10min")
+        create_cycle_box(6, 30, 6, 40, color_10min, "London 10min")
+        create_cycle_box(6, 40, 6, 50, color_10min, "London 10min")
+        create_cycle_box(6, 50, 7, 0, color_10min, "London 10min")
+
+    // === NY AM SESSION CYCLES ===
+    if actual_show_90min
+        create_90min_cycle_box_with_pivots(7, 0, 8, 30, color_90min_a, "NY AM 90min A")
+        create_90min_cycle_box_with_pivots(8, 30, 10, 0, color_90min_m, "NY AM 90min M")
+        create_90min_cycle_box_with_pivots(10, 0, 11, 30, color_90min_d, "NY AM 90min D")
+
+    if actual_show_30min
+        create_cycle_box(7, 0, 7, 30, color_30min, "NY AM 30min 1")
+        create_cycle_box(7, 30, 8, 0, color_30min, "NY AM 30min 2")
+        create_cycle_box(8, 0, 8, 30, color_30min, "NY AM 30min 3")
+        create_cycle_box(8, 30, 9, 0, color_30min, "NY AM 30min 4")
+        create_cycle_box(9, 0, 9, 30, color_30min, "NY AM 30min 5")
+        create_cycle_box(9, 30, 10, 0, color_30min, "NY AM 30min 6")
+        create_cycle_box(10, 0, 10, 30, color_30min, "NY AM 30min 7")
+        create_cycle_box(10, 30, 11, 0, color_30min, "NY AM 30min 8")
+        create_cycle_box(11, 0, 11, 30, color_30min, "NY AM 30min 9")
+
+    if actual_show_10min
+        // NY AM 10-min cycles
+        create_cycle_box(7, 0, 7, 10, color_10min, "NY AM 10min")
+        create_cycle_box(7, 10, 7, 20, color_10min, "NY AM 10min")
+        create_cycle_box(7, 20, 7, 30, color_10min, "NY AM 10min")
+        create_cycle_box(7, 30, 7, 40, color_10min, "NY AM 10min")
+        create_cycle_box(7, 40, 7, 50, color_10min, "NY AM 10min")
+        create_cycle_box(7, 50, 8, 0, color_10min, "NY AM 10min")
+        create_cycle_box(8, 0, 8, 10, color_10min, "NY AM 10min")
+        create_cycle_box(8, 10, 8, 20, color_10min, "NY AM 10min")
+        create_cycle_box(8, 20, 8, 30, color_10min, "NY AM 10min")
+        create_cycle_box(8, 30, 8, 40, color_10min, "NY AM 10min")
+        create_cycle_box(8, 40, 8, 50, color_10min, "NY AM 10min")
+        create_cycle_box(8, 50, 9, 0, color_10min, "NY AM 10min")
+        create_cycle_box(9, 0, 9, 10, color_10min, "NY AM 10min")
+        create_cycle_box(9, 10, 9, 20, color_10min, "NY AM 10min")
+        create_cycle_box(9, 20, 9, 30, color_10min, "NY AM 10min")
+        create_cycle_box(9, 30, 9, 40, color_10min, "NY AM 10min")
+        create_cycle_box(9, 40, 9, 50, color_10min, "NY AM 10min")
+        create_cycle_box(9, 50, 10, 0, color_10min, "NY AM 10min")
+        create_cycle_box(10, 0, 10, 10, color_10min, "NY AM 10min")
+        create_cycle_box(10, 10, 10, 20, color_10min, "NY AM 10min")
+        create_cycle_box(10, 20, 10, 30, color_10min, "NY AM 10min")
+        create_cycle_box(10, 30, 10, 40, color_10min, "NY AM 10min")
+        create_cycle_box(10, 40, 10, 50, color_10min, "NY AM 10min")
+        create_cycle_box(10, 50, 11, 0, color_10min, "NY AM 10min")
+        create_cycle_box(11, 0, 11, 10, color_10min, "NY AM 10min")
+        create_cycle_box(11, 10, 11, 20, color_10min, "NY AM 10min")
+        create_cycle_box(11, 20, 11, 30, color_10min, "NY AM 10min")
+
+    // === NY PM SESSION CYCLES ===
+    if actual_show_90min
+        create_90min_cycle_box_with_pivots(11, 30, 13, 0, color_90min_a, "NY PM 90min A")
+        create_90min_cycle_box_with_pivots(13, 0, 14, 30, color_90min_m, "NY PM 90min M")
+        create_90min_cycle_box_with_pivots(14, 30, 16, 0, color_90min_d, "NY PM 90min D")
+
+    if actual_show_30min
+        create_cycle_box(11, 30, 12, 0, color_30min, "NY PM 30min 1")
+        create_cycle_box(12, 0, 12, 30, color_30min, "NY PM 30min 2")
+        create_cycle_box(12, 30, 13, 0, color_30min, "NY PM 30min 3")
+        create_cycle_box(13, 0, 13, 30, color_30min, "NY PM 30min 4")
+        create_cycle_box(13, 30, 14, 0, color_30min, "NY PM 30min 5")
+        create_cycle_box(14, 0, 14, 30, color_30min, "NY PM 30min 6")
+        create_cycle_box(14, 30, 15, 0, color_30min, "NY PM 30min 7")
+        create_cycle_box(15, 0, 15, 30, color_30min, "NY PM 30min 8")
+        create_cycle_box(15, 30, 16, 0, color_30min, "NY PM 30min 9")
+
+    if actual_show_10min
+        // NY PM 10-min cycles
+        create_cycle_box(11, 30, 11, 40, color_10min, "NY PM 10min")
+        create_cycle_box(11, 40, 11, 50, color_10min, "NY PM 10min")
+        create_cycle_box(11, 50, 12, 0, color_10min, "NY PM 10min")
+        create_cycle_box(12, 0, 12, 10, color_10min, "NY PM 10min")
+        create_cycle_box(12, 10, 12, 20, color_10min, "NY PM 10min")
+        create_cycle_box(12, 20, 12, 30, color_10min, "NY PM 10min")
+        create_cycle_box(12, 30, 12, 40, color_10min, "NY PM 10min")
+        create_cycle_box(12, 40, 12, 50, color_10min, "NY PM 10min")
+        create_cycle_box(12, 50, 13, 0, color_10min, "NY PM 10min")
+        create_cycle_box(13, 0, 13, 10, color_10min, "NY PM 10min")
+        create_cycle_box(13, 10, 13, 20, color_10min, "NY PM 10min")
+        create_cycle_box(13, 20, 13, 30, color_10min, "NY PM 10min")
+        create_cycle_box(13, 30, 13, 40, color_10min, "NY PM 10min")
+        create_cycle_box(13, 40, 13, 50, color_10min, "NY PM 10min")
+        create_cycle_box(13, 50, 14, 0, color_10min, "NY PM 10min")
+        create_cycle_box(14, 0, 14, 10, color_10min, "NY PM 10min")
+        create_cycle_box(14, 10, 14, 20, color_10min, "NY PM 10min")
+        create_cycle_box(14, 20, 14, 30, color_10min, "NY PM 10min")
+        create_cycle_box(14, 30, 14, 40, color_10min, "NY PM 10min")
+        create_cycle_box(14, 40, 14, 50, color_10min, "NY PM 10min")
+        create_cycle_box(14, 50, 15, 0, color_10min, "NY PM 10min")
+        create_cycle_box(15, 0, 15, 10, color_10min, "NY PM 10min")
+        create_cycle_box(15, 10, 15, 20, color_10min, "NY PM 10min")
+        create_cycle_box(15, 20, 15, 30, color_10min, "NY PM 10min")
+        create_cycle_box(15, 30, 15, 40, color_10min, "NY PM 10min")
+        create_cycle_box(15, 40, 15, 50, color_10min, "NY PM 10min")
+        create_cycle_box(15, 50, 16, 0, color_10min, "NY PM 10min")
+
+// Opening price lines
+if show_midnight
+    create_opening_line(0, 0, midnight_color, midnight_style, "00:00")
+if show_830
+    create_opening_line(8, 30, color_830, style_830, "08:30")
+if show_930
+    create_opening_line(9, 30, color_930, style_930, "09:30")
+
+// Previous period High/Low lines
+create_prev_period_lines(show_prev_day, show_prev_day_labels, prev_day_color, prev_day_style, "day")
+create_prev_period_lines(show_prev_week, show_prev_week_labels, prev_week_color, prev_week_style, "week")
+create_prev_period_lines(show_prev_month, show_prev_month_labels, prev_month_color, prev_month_style, "month")
+
+// Display warning only for invalid timeframes
+if barstate.islast and show_warning
+    var label warning_label = na
+    if not na(warning_label)
+        label.delete(warning_label)
+    
+    warning_label := label.new(x=bar_index + 5, y=close, text="⚠️ Timeframe too high for Time Cycles\nUse 4H or lower timeframes", color=color.new(color.red, 30), textcolor=color.white, style=label.style_label_left, size=size.small)
