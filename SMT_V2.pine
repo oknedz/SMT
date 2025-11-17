@@ -111,8 +111,10 @@ type SymbolData
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Security data
-[s1_high, s1_low, s1_close] = request.security(symbol1, timeframe.period, [high, low, close], lookahead=barmerge.lookahead_off)
-[s2_high, s2_low, s2_close] = request.security(symbol2, timeframe.period, [high, low, close], lookahead=barmerge.lookahead_off)
+// Using empty string "" for timeframe to get comparison symbol's native timeframe
+// This ensures proper data alignment for different market sessions (crypto vs indices)
+[s1_high, s1_low, s1_close] = request.security(symbol1, "", [high, low, close], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
+[s2_high, s2_low, s2_close] = request.security(symbol2, "", [high, low, close], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
 
 // Cycle managers array
 var array<CycleManager> cycleManagers = array.new<CycleManager>()
@@ -258,7 +260,20 @@ completeCycle(manager) =>
     startNewCycle(manager.current)
 
 shouldCompleteCycle(cycle, durationMs) =>
-    cycle.active and not na(cycle.startTime) and (time - cycle.startTime >= durationMs)
+    if not cycle.active or na(cycle.startTime)
+        false
+    else
+        // Calculate elapsed time only counting bars (works for both 24/7 and gapped markets)
+        elapsedBars = bar_index - cycle.startBar
+        
+        // Calculate how many bars we expect in the duration based on current timeframe
+        timeframeSeconds = timeframe.in_seconds(timeframe.period)
+        durationSeconds = durationMs / 1000
+        expectedBars = math.floor(durationSeconds / timeframeSeconds)
+        
+        // Complete cycle if we've had enough bars OR enough wallclock time has passed
+        // This ensures it works for both continuous markets (crypto) and gapped markets (indices)
+        elapsedBars >= expectedBars or (time - cycle.startTime >= durationMs)
 
 requiresSpecialTimeframe(manager) =>
     manager.config.durationMinutes == 3
