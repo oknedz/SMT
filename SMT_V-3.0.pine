@@ -1,8 +1,71 @@
 //@version=6
-indicator("SMT V-3.0", "SMT Detector [StoneFace]", overlay=true, max_lines_count=500, max_labels_count=500)
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SMT V-3.0 - SMT Divergence Detector
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  Description:
+//      Advanced SMT divergence detector that tracks and
+//      compares price action across multiple correlated symbols in real-time.
+//      Identifies divergences between main chart and comparison symbols across
+//      multiple time cycles (90min, 30min, 10min & 3min) to spot potential reversal points.
+//
+//  Key Features:
+//      • Real-time cycle high/low tracking with dynamic line updates
+//      • Multi-symbol comparison (up to 2 additional symbols)
+//      • 4 independent time cycles (90min, 30min, 10min, 3min)
+//      • 8 SMT detection types (Normal & Inverse for Bullish/Bearish)
+//      • Combined symbol labels when multiple SMTs align
+//      • Session-based filtering with timezone support
+//      • Automatic invalidation of broken SMT patterns
+//      • Smart symbol abbreviation for clean chart display
+//
+//  Use Cases:
+//      • Identify divergences between correlated futures (ES, NQ, BTC, EUR, JPY, GBP, etc)
+//      • Spot institutional order flow differences
+//      • Find high-probability reversal zones
+//      • Confirm trend strength across multiple timeframes
+//      • Detect smart money vs retail money positioning
+//
+//  Version: 3.0
+//  Author: StoneFace / StoneFace_Trading
+//  Release Date: Nov. 18. 2025
+//  
+//  © 2025. Stoneface. All rights reserved.
+//  This source code is protected. Unauthorized distribution or modification
+//  is strictly prohibited.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
+indicator("SMT V-3.0 - SMT Detector", 
+     shorttitle="SMT V-3.0", 
+     overlay=true, 
+     max_lines_count=500, 
+     max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                              INPUTS & CONSTANTS
+//                              INPUTS & SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  COMPARISON SYMBOLS:
+//      Select up to 2 symbols to compare against your main chart. 
+//      Best results with correlated assets (e.g., ES vs NQ, BTC vs ETH).
+//      Use continuous contracts (ES1!, NQ1!) or specific contract months.
+//
+//  CYCLE TIMEFRAMES:
+//      Enable cycles based on your trading timeframe:
+//      • 90-min: Swing trading, higher timeframe confirmation
+//      • 30-min: Intraday trends, session-based setups
+//      • 10-min: Scalping entries, precise timing
+//      • 3-min: Ultra-short-term, quick reversals (1-min chart recommended)
+//
+//  SESSION FILTER:
+//      Limit detection to specific trading sessions (e.g., NYSE hours).
+//      Helps avoid low-volume periods and reduces false signals.
+//
+//  DISPLAY:
+//      Max Total SMT Lines controls chart clutter. Higher values show more
+//      historical SMTs but may make chart harder to read.
+//
 // ═══════════════════════════════════════════════════════════════════════════════
 
 enableSymbol1 = input.bool(true, "Enable Symbol 1", group="Comparison Symbols", inline="sym1")
@@ -413,7 +476,30 @@ processSMT(m) =>
             array.remove(m.history, 0)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//                              MAIN EXECUTION
+//                              MAIN EXECUTION LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  EXECUTION FLOW:
+//      1. Track daily reset - Clear all SMTs at day change
+//      2. Check invalidation - Remove SMTs broken by new price action
+//      3. Session filter - Only process during active trading session
+//      4. Cycle management - Start, update, or complete cycles
+//      5. SMT detection - Compare current vs previous cycles
+//      6. Real-time updates - Move line endpoints as extremes change
+//
+//  SMT DETECTION LOGIC:
+//      Bearish SMT (Normal): Main makes higher high, Comparison makes lower high
+//      Bullish SMT (Normal): Main makes lower low, Comparison makes higher low
+//      Bearish SMT (Inverse): Comparison makes higher high, Main makes lower high
+//      Bullish SMT (Inverse): Comparison makes lower low, Main makes higher low
+//
+//  LINE DISPLAY:
+//      • Black lines connect previous cycle extreme to current cycle extreme
+//      • Labels show: "SMT-[Symbol(s)] [Cycle]"
+//      • Combined labels (e.g., "SMT-BTC+ES 90") indicate multiple SMTs aligned
+//      • Lines update in real-time as current cycle's high/low changes
+//      • Lines are automatically removed if pattern is invalidated
+//
 // ═══════════════════════════════════════════════════════════════════════════════
 
 currentDay = dayofmonth(time)
