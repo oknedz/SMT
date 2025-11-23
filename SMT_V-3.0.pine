@@ -129,8 +129,8 @@ type LineMetadata
 //                              GLOBAL STATE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-[s1_high, s1_low, s1_close] = request.security(symbol1, "", [high, low, close], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
-[s2_high, s2_low, s2_close] = request.security(symbol2, "", [high, low, close], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
+[s1_high, s1_low, s1_close] = request.security(symbol1, "", [high, low, close], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+[s2_high, s2_low, s2_close] = request.security(symbol2, "", [high, low, close], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 
 var array<CycleManager> managers = array.new<CycleManager>()
 var array<LineMetadata> lines = array.new<LineMetadata>()
@@ -242,6 +242,7 @@ updateCyclePivots(c) =>
                 c.s2PivotLow.barIndex := bar_index
                 c.s2PivotLow.time := time
                 c.s2PivotLow.confirmed := true
+        
 
 completeCycle(m) =>
     // Create deep copies of pivot points
@@ -251,7 +252,6 @@ completeCycle(m) =>
     s1LowCopy = createPivot(m.current.s1PivotLow.price, m.current.s1PivotLow.barIndex, m.current.s1PivotLow.time)
     s2HighCopy = createPivot(m.current.s2PivotHigh.price, m.current.s2PivotHigh.barIndex, m.current.s2PivotHigh.time)
     s2LowCopy = createPivot(m.current.s2PivotLow.price, m.current.s2PivotLow.barIndex, m.current.s2PivotLow.time)
-    
     savedCycle = CycleData.new(m.current.startTime, m.current.startBar, mainHighCopy, mainLowCopy, s1HighCopy, s1LowCopy, s2HighCopy, s2LowCopy, true)
     array.push(m.history, savedCycle)
     startCycle(m.current)
@@ -295,6 +295,9 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
         shouldAdd = true
         mergeIdx = -1
         
+        lineColor = color.black
+        textColor = color.black
+        
         if array.size(lines) > 0
             for i = 0 to array.size(lines) - 1
                 m = array.get(lines, i)
@@ -304,45 +307,41 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
                     mergeIdx := i
                     shouldAdd := false
                     break
-                else if m.isBearish == bearish
-                    if m.length < newLen
-                        idxRemove := i
-                    else
-                        shouldAdd := false
         
         isNew = false
         if mergeIdx >= 0
             // Merge with existing SMT
             existing = array.get(lines, mergeIdx)
+            
+            // Always update if line is longer/better (even if symbol already exists)
+            if newLen > existing.length
+                // Redraw the line with better coordinates
+                line.delete(existing.lineObj)
+                existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=line.style_solid)
+                existing.length := newLen
+                existing.mainPrice := price1
+                existing.compPrice := compPrice
+                // Update label position
+                labTime = time1 > time2 ? time1 : time2
+                labPrice = time1 > time2 ? price1 : price2
+                label.set_xy(existing.labelObj, labTime, labPrice)
+            
+            // Add symbol if not already present
             if str.contains(existing.symbols, symbolStr) == false
-                // Check if new line is longer/better
-                if newLen > existing.length
-                    // Redraw the line with better coordinates
-                    line.delete(existing.lineObj)
-                    existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=color.black, width=1, style=line.style_solid)
-                    existing.length := newLen
-                    existing.mainPrice := price1
-                    existing.compPrice := compPrice
-                    // Update label position
-                    labTime = time1 > time2 ? time1 : time2
-                    labPrice = time1 > time2 ? price1 : price2
-                    label.set_xy(existing.labelObj, labTime, labPrice)
-                
                 newSymbols = existing.symbols + " + " + symbolStr
                 label.set_text(existing.labelObj, "SMT-" + newSymbols + " " + cycleLabel)
                 existing.symbols := newSymbols
+            
             isNew := false
         else if shouldAdd
-            if idxRemove >= 0
-                old = array.remove(lines, idxRemove)
-                line.delete(old.lineObj)
-                label.delete(old.labelObj)
+            // No need to remove old lines here based on length anymore.
+            // Just add the new one and let the FIFO limit handle cleanup.
             
-            l = line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=color.black, width=1, style=line.style_solid)
+            l = line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=line.style_solid)
             labTime = time1 > time2 ? time1 : time2
             labPrice = time1 > time2 ? price1 : price2
             txt = "SMT-" + symbolStr + " " + cycleLabel
-            lab = label.new(labTime, labPrice, txt, xloc=xloc.bar_time, style=label.style_none, color=color.black, textcolor=color.black, size=size.small, yloc=bearish ? yloc.abovebar : yloc.belowbar)
+            lab = label.new(labTime, labPrice, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=bearish ? yloc.abovebar : yloc.belowbar)
             
             array.push(lines, LineMetadata.new(l, lab, bearish, newLen, typeId, price1, compPrice, symbolStr, cycleLabel, bar2, true))
             
@@ -527,11 +526,13 @@ if inSession()
         if not m.current.active
             startCycle(m.current)
         
+        updateCyclePivots(m.current)
+        
         cycleCompleted = shouldComplete(m.current, m.duration)
         
         if cycleCompleted
             completeCycle(m)
         
-        updateCyclePivots(m.current)
+        // Always process SMT to detect/update in real-time
         processSMT(m)
         updateExistingLines(m)
