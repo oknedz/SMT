@@ -490,7 +490,7 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             if newLen > existing.length
                 // Redraw the line with better coordinates
                 line.delete(existing.lineObj)
-                existing.lineObj := line.new(bar1, price1, bar2, price2, xloc=xloc.bar_index, color=lineColor, width=1, style=line.style_solid)
+                existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=line.style_solid)
                 existing.length := newLen
                 existing.mainPrice := price1
                 existing.compPrice := compPrice
@@ -513,10 +513,10 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             // No need to remove old lines here based on length anymore.
             // Just add the new one and let the FIFO limit handle cleanup.
             
-            l = line.new(bar1, price1, bar2, price2, xloc=xloc.bar_index, color=lineColor, width=1, style=line.style_solid)
+            l = line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=line.style_solid)
             
             // Use right side of line (end point) for label placement
-            endBar = bar2
+            endTime = time2
             endPrice = price2
             
             // Calculate stack position based on cycle priority: 90 > 30 > 10 > 3 > sessions
@@ -544,7 +544,7 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             txt = isSessionLabel ? cycleLabel + " " + symbolStr : cycleLabel + "m " + symbolStr
             
             // Create label at right side of line (end point) with vertical offset
-            lab = label.new(endBar, endPrice + totalOffset, txt, xloc=xloc.bar_index, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
+            lab = label.new(endTime, endPrice + totalOffset, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
             
             array.push(lines, LineMetadata.new(l, lab, bearish, newLen, typeId, price1, compPrice, symbolStr, cycleLabel, cycleStartBar, true))
             
@@ -601,7 +601,7 @@ updateExistingLines(m) =>
                 
                 if not na(currPivot.price)
                     // Update the line endpoint to current cycle's extreme
-                    line.set_xy2(meta.lineObj, currPivot.barIndex, currPivot.price)
+                    line.set_xy2(meta.lineObj, currPivot.time, currPivot.price)
 
 processSMT(m) =>
     // Process SMT when we have at least one completed cycle in history
@@ -618,82 +618,87 @@ processSMT(m) =>
         if na(curr.startTime)
             [false, false]
         else
-            // Only check most recent completed cycle (index 0 is oldest after cleanup)
-            latestIdx = array.size(m.history) - 1
-            prev = array.get(m.history, latestIdx)
-            
             // Track if new SMT detected
             bearishSmtDetected = false
             bullishSmtDetected = false
             
-            // Pre-fetch all pivots once (renamed to avoid shadowing session globals)
-            currMainHigh = curr.mainPivotHigh
-            currMainLow = curr.mainPivotLow
-            cycPrevMainHigh = prev.mainPivotHigh
-            cycPrevMainLow = prev.mainPivotLow
-            currS1High = curr.s1PivotHigh
-            currS1Low = curr.s1PivotLow
-            cycPrevS1High = prev.s1PivotHigh
-            cycPrevS1Low = prev.s1PivotLow
-            currS2High = curr.s2PivotHigh
-            currS2Low = curr.s2PivotLow
-            cycPrevS2High = prev.s2PivotHigh
-            cycPrevS2Low = prev.s2PivotLow
+            // Compare current cycle against previous completed cycles
+            // 3-min cycle: only compare last 2 cycles
+            // Other cycles: compare all cycles (up to 10)
+            maxCompare = m.duration == 3 ? math.min(2, array.size(m.history)) : array.size(m.history)
+            startIdx = m.duration == 3 ? math.max(0, array.size(m.history) - maxCompare) : 0
             
-            // Check Symbol 1 SMTs (only if enabled)
-            if enableSymbol1
-                // Bearish High Normal
-                if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS1High.price) and not na(cycPrevS1High.price)
-                    if currMainHigh.price > cycPrevMainHigh.price and currS1High.price < cycPrevS1High.price
-                        smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 0, currS1High.price, curr.startBar)
-                        if smtDrawn
-                            bearishSmtDetected := true
+            for prevIdx = startIdx to array.size(m.history) - 1
+                prev = array.get(m.history, prevIdx)
                 
-                // Bullish Low Normal
-                if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS1Low.price) and not na(cycPrevS1Low.price)
-                    if currMainLow.price < cycPrevMainLow.price and currS1Low.price > cycPrevS1Low.price
-                        smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 1, currS1Low.price, curr.startBar)
-                        if smtDrawn
-                            bullishSmtDetected := true
+                // Pre-fetch all pivots once (renamed to avoid shadowing session globals)
+                currMainHigh = curr.mainPivotHigh
+                currMainLow = curr.mainPivotLow
+                cycPrevMainHigh = prev.mainPivotHigh
+                cycPrevMainLow = prev.mainPivotLow
+                currS1High = curr.s1PivotHigh
+                currS1Low = curr.s1PivotLow
+                cycPrevS1High = prev.s1PivotHigh
+                cycPrevS1Low = prev.s1PivotLow
+                currS2High = curr.s2PivotHigh
+                currS2Low = curr.s2PivotLow
+                cycPrevS2High = prev.s2PivotHigh
+                cycPrevS2Low = prev.s2PivotLow
                 
-                // Bearish High Inverse
-                if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS1High.price) and not na(cycPrevS1High.price)
-                    if currS1High.price > cycPrevS1High.price and currMainHigh.price < cycPrevMainHigh.price
-                        drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 4, currS1High.price, curr.startBar)
+                // Check Symbol 1 SMTs (only if enabled)
+                if enableSymbol1
+                    // Bearish High Normal
+                    if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS1High.price) and not na(cycPrevS1High.price)
+                        if currMainHigh.price > cycPrevMainHigh.price and currS1High.price < cycPrevS1High.price
+                            smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 0, currS1High.price, curr.startBar)
+                            if smtDrawn
+                                bearishSmtDetected := true
+                    
+                    // Bullish Low Normal
+                    if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS1Low.price) and not na(cycPrevS1Low.price)
+                        if currMainLow.price < cycPrevMainLow.price and currS1Low.price > cycPrevS1Low.price
+                            smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 1, currS1Low.price, curr.startBar)
+                            if smtDrawn
+                                bullishSmtDetected := true
+                    
+                    // Bearish High Inverse
+                    if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS1High.price) and not na(cycPrevS1High.price)
+                        if currS1High.price > cycPrevS1High.price and currMainHigh.price < cycPrevMainHigh.price
+                            drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 4, currS1High.price, curr.startBar)
+                    
+                    // Bullish Low Inverse
+                    if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS1Low.price) and not na(cycPrevS1Low.price)
+                        if currS1Low.price < cycPrevS1Low.price and currMainLow.price > cycPrevMainLow.price
+                            drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 5, currS1Low.price, curr.startBar)
                 
-                // Bullish Low Inverse
-                if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS1Low.price) and not na(cycPrevS1Low.price)
-                    if currS1Low.price < cycPrevS1Low.price and currMainLow.price > cycPrevMainLow.price
-                        drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 5, currS1Low.price, curr.startBar)
+                // Check Symbol 2 SMTs (only if enabled)
+                if enableSymbol2
+                    // Bearish High Normal
+                    if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS2High.price) and not na(cycPrevS2High.price)
+                        if currMainHigh.price > cycPrevMainHigh.price and currS2High.price < cycPrevS2High.price
+                            smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 2, currS2High.price, curr.startBar)
+                            if smtDrawn
+                                bearishSmtDetected := true
+                    
+                    // Bullish Low Normal
+                    if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS2Low.price) and not na(cycPrevS2Low.price)
+                        if currMainLow.price < cycPrevMainLow.price and currS2Low.price > cycPrevS2Low.price
+                            smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 3, currS2Low.price, curr.startBar)
+                            if smtDrawn
+                                bullishSmtDetected := true
+                    
+                    // Bearish High Inverse
+                    if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS2High.price) and not na(cycPrevS2High.price)
+                        if currS2High.price > cycPrevS2High.price and currMainHigh.price < cycPrevMainHigh.price
+                            drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 6, currS2High.price, curr.startBar)
+                    
+                    // Bullish Low Inverse
+                    if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS2Low.price) and not na(cycPrevS2Low.price)
+                        if currS2Low.price < cycPrevS2Low.price and currMainLow.price > cycPrevMainLow.price
+                            drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 7, currS2Low.price, curr.startBar)
             
-            // Check Symbol 2 SMTs (only if enabled)
-            if enableSymbol2
-                // Bearish High Normal
-                if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS2High.price) and not na(cycPrevS2High.price)
-                    if currMainHigh.price > cycPrevMainHigh.price and currS2High.price < cycPrevS2High.price
-                        smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 2, currS2High.price, curr.startBar)
-                        if smtDrawn
-                            bearishSmtDetected := true
-                
-                // Bullish Low Normal
-                if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS2Low.price) and not na(cycPrevS2Low.price)
-                    if currMainLow.price < cycPrevMainLow.price and currS2Low.price > cycPrevS2Low.price
-                        smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 3, currS2Low.price, curr.startBar)
-                        if smtDrawn
-                            bullishSmtDetected := true
-                
-                // Bearish High Inverse
-                if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS2High.price) and not na(cycPrevS2High.price)
-                    if currS2High.price > cycPrevS2High.price and currMainHigh.price < cycPrevMainHigh.price
-                        drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 6, currS2High.price, curr.startBar)
-                
-                // Bullish Low Inverse
-                if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS2Low.price) and not na(cycPrevS2Low.price)
-                    if currS2Low.price < cycPrevS2Low.price and currMainLow.price > cycPrevMainLow.price
-                        drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 7, currS2Low.price, curr.startBar)
-            
-            // Cleanup old cycles
-            while array.size(m.history) > 3
+            // Cleanup old cycles (keep more history for comparison)
+            while array.size(m.history) > 10
                 array.remove(m.history, 0)
             
             [bearishSmtDetected, bullishSmtDetected]
