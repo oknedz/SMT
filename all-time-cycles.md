@@ -176,5 +176,6 @@
 - **30-minute cycles**: Balanced approach for intraday swing trading
 - **10-minute cycles**: High-frequency analysis and scalping strategies
 
-All cycles reset daily at 00:00 NY time and restart at 02:30 NY time.
+All cycles reset daily at 00:00 NY time and restart at 02:30 NY time
 
+These Time cycle have to be strictly followed. 

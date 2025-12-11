@@ -1,0 +1,532 @@
+//@version=6
+
+// @description Smart Money Technique (SMT) Core Library - Provides essential data structures, 
+// functions, and methods for detecting and managing SMT divergences across multiple symbols and timeframes.
+// This library handles cycle management, pivot tracking, SMT detection logic, and session-based analysis.
+library("SMT_Core", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              TYPE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @type Represents a price pivot point (high or low) with confirmation status
+// @field price The price level of the pivot
+// @field barIndex The bar index where pivot occurred
+// @field time The timestamp of the pivot
+// @field confirmed Whether the pivot is confirmed
+export type PivotPoint
+    float price
+    int barIndex
+    int time
+    bool confirmed
+
+// @type Stores cycle data including main chart and comparison symbol pivots
+// @field startTime Cycle start timestamp
+// @field startBar Cycle start bar index
+// @field mainPivotHigh Main chart highest high in cycle
+// @field mainPivotLow Main chart lowest low in cycle
+// @field s1PivotHigh Symbol 1 highest high in cycle
+// @field s1PivotLow Symbol 1 lowest low in cycle
+// @field s2PivotHigh Symbol 2 highest high in cycle
+// @field s2PivotLow Symbol 2 lowest low in cycle
+// @field active Whether cycle is currently active
+export type CycleData
+    int startTime
+    int startBar
+    PivotPoint mainPivotHigh
+    PivotPoint mainPivotLow
+    PivotPoint s1PivotHigh
+    PivotPoint s1PivotLow
+    PivotPoint s2PivotHigh
+    PivotPoint s2PivotLow
+    bool active
+
+// @type Manages cycles with specific duration and history tracking
+// @field duration Cycle duration in minutes
+// @field label Display label for the cycle
+// @field enabled Whether cycle detection is enabled
+// @field current Currently active cycle data
+// @field history Array of completed cycles
+export type CycleManager
+    int duration
+    string label
+    bool enabled
+    CycleData current
+    array<CycleData> history
+
+// @type Metadata for drawn SMT lines and labels
+// @field lineObj The line object
+// @field labelObj The label object
+// @field isBearish True if bearish SMT
+// @field length Geometric length of the line
+// @field smtTypeId Type identifier (0-7)
+// @field mainPrice Main chart price
+// @field compPrice Comparison symbol price
+// @field symbols Symbol abbreviations
+// @field cycleLabel Cycle label
+// @field historyCycleStart Start bar of historical cycle
+// @field isForCurrentCycle Whether line is for current active cycle
+export type LineMetadata
+    line lineObj
+    label labelObj
+    bool isBearish
+    float length
+    int smtTypeId
+    float mainPrice
+    float compPrice
+    string symbols
+    string cycleLabel
+    int historyCycleStart
+    bool isForCurrentCycle
+
+// @type Represents a trading session with pivot tracking
+// @field name Session name (ASIA, LONDON, NY-AM, NY-PM)
+// @field sessionTime Session time string (e.g., "0700-1130")
+// @field timezone Session timezone
+// @field sessionColor Display color for session
+// @field enabled Whether session tracking is enabled
+// @field mainHigh Main chart session high
+// @field mainLow Main chart session low
+// @field s1High Symbol 1 session high
+// @field s1Low Symbol 1 session low
+// @field s2High Symbol 2 session high
+// @field s2Low Symbol 2 session low
+// @field active Whether session is currently active
+// @field startTime Session start timestamp
+export type DailySession
+    string name
+    string sessionTime
+    string timezone
+    color sessionColor
+    bool enabled
+    PivotPoint mainHigh
+    PivotPoint mainLow
+    PivotPoint s1High
+    PivotPoint s1Low
+    PivotPoint s2High
+    PivotPoint s2Low
+    bool active
+    int startTime
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @function Extracts abbreviated symbol name from full ticker
+// @param sym Full symbol string (e.g., "BINANCE:BTCUSDT")
+// @returns Abbreviated symbol (e.g., "BTC" or "ES")
+export getSymbolAbbr(string sym) =>
+    parts = str.split(sym, ":")
+    ticker = array.size(parts) > 1 ? array.get(parts, 1) : array.get(parts, 0)
+    
+    // Remove common suffixes
+    clean = str.replace_all(str.replace_all(str.replace_all(ticker, "USDT", ""), ".P", ""), "USD", "")
+    
+    // Check if it ends with 1! (futures like ES1!, NQ1!)
+    if str.contains(clean, "1!")
+        clean := str.replace_all(clean, "1!", "")
+        str.substring(clean, 0, math.min(str.length(clean), 2))
+    else
+        // For other symbols, take first 4 chars
+        str.substring(clean, 0, math.min(str.length(clean), 4))
+
+// @function Calculates geometric length between two points
+// @param bar1 First bar index
+// @param price1 First price
+// @param bar2 Second bar index
+// @param price2 Second price
+// @returns Euclidean distance
+export calcLength(int bar1, float price1, int bar2, float price2) =>
+    barDiff = math.abs(bar2 - bar1)
+    priceDiff = math.abs(price2 - price1)
+    math.sqrt(barDiff * barDiff + priceDiff * priceDiff)
+
+// @function Creates a new pivot point
+// @param price Pivot price level
+// @param barIdx Bar index of pivot
+// @param t Timestamp of pivot
+// @returns New PivotPoint object
+export createPivot(float price, int barIdx, int t) =>
+    PivotPoint.new(price, barIdx, t, true)
+
+// @function Checks if current time is within session
+// @param sessionTime Session time string
+// @param timezone Session timezone
+// @returns True if in session
+export isInSession(string sessionTime, string timezone) =>
+    not na(time("", sessionTime, timezone))
+
+// @function Normalizes symbol ticker for security requests
+// @param symbol Symbol to normalize
+// @returns Normalized ticker string
+export normalizeSymbol(string symbol) =>
+    ticker.standard(symbol)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              INITIALIZATION FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @function Initializes empty cycle data
+// @returns New CycleData object with NA values
+export initCycleData() =>
+    CycleData.new(
+        na, na, 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        false
+    )
+
+// @function Initializes a cycle manager
+// @param duration Cycle duration in minutes
+// @param label Display label
+// @param enabled Whether cycle is enabled
+// @returns New CycleManager object
+export initCycleManager(int duration, string label, bool enabled) =>
+    CycleManager.new(
+        duration, 
+        label, 
+        enabled, 
+        initCycleData(), 
+        array.new<CycleData>()
+    )
+
+// @function Initializes a daily session
+// @param name Session name
+// @param sessionTime Session time string
+// @param timezone Session timezone
+// @param sessionColor Display color
+// @param enabled Whether session is enabled
+// @returns New DailySession object
+export initDailySession(string name, string sessionTime, string timezone, color sessionColor, bool enabled) =>
+    DailySession.new(
+        name, sessionTime, timezone, sessionColor, enabled, 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        createPivot(na, na, na), 
+        false, 
+        na
+    )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              CYCLE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @function Starts a new cycle
+// @param c CycleData object to initialize
+// @returns void
+export method startCycle(CycleData c) =>
+    c.startTime := time
+    c.startBar := bar_index
+    c.mainPivotHigh := createPivot(na, na, na)
+    c.mainPivotLow := createPivot(na, na, na)
+    c.s1PivotHigh := createPivot(na, na, na)
+    c.s1PivotLow := createPivot(na, na, na)
+    c.s2PivotHigh := createPivot(na, na, na)
+    c.s2PivotLow := createPivot(na, na, na)
+    c.active := true
+
+// @function Updates cycle pivots with current bar data
+// @param c CycleData to update
+// @param mainHigh Current main chart high
+// @param mainLow Current main chart low
+// @param s1High Symbol 1 high (optional, use na if not available)
+// @param s1Low Symbol 1 low (optional, use na if not available)
+// @param s2High Symbol 2 high (optional, use na if not available)
+// @param s2Low Symbol 2 low (optional, use na if not available)
+// @returns void
+export method updateCyclePivots(CycleData c, float mainHigh, float mainLow, 
+                                 float s1High = na, float s1Low = na, 
+                                 float s2High = na, float s2Low = na) =>
+    if c.active
+        // Track main chart extremes
+        if mainHigh > c.mainPivotHigh.price or na(c.mainPivotHigh.price)
+            c.mainPivotHigh.price := mainHigh
+            c.mainPivotHigh.barIndex := bar_index
+            c.mainPivotHigh.time := time
+            c.mainPivotHigh.confirmed := true
+        
+        if mainLow < c.mainPivotLow.price or na(c.mainPivotLow.price)
+            c.mainPivotLow.price := mainLow
+            c.mainPivotLow.barIndex := bar_index
+            c.mainPivotLow.time := time
+            c.mainPivotLow.confirmed := true
+        
+        // Track Symbol 1 extremes if provided
+        if not na(s1High) and not na(s1Low) and s1High > 0 and s1Low > 0
+            if s1High > c.s1PivotHigh.price or na(c.s1PivotHigh.price)
+                c.s1PivotHigh.price := s1High
+                c.s1PivotHigh.barIndex := bar_index
+                c.s1PivotHigh.time := time
+                c.s1PivotHigh.confirmed := true
+            
+            if s1Low < c.s1PivotLow.price or na(c.s1PivotLow.price)
+                c.s1PivotLow.price := s1Low
+                c.s1PivotLow.barIndex := bar_index
+                c.s1PivotLow.time := time
+                c.s1PivotLow.confirmed := true
+        
+        // Track Symbol 2 extremes if provided
+        if not na(s2High) and not na(s2Low) and s2High > 0 and s2Low > 0
+            if s2High > c.s2PivotHigh.price or na(c.s2PivotHigh.price)
+                c.s2PivotHigh.price := s2High
+                c.s2PivotHigh.barIndex := bar_index
+                c.s2PivotHigh.time := time
+                c.s2PivotHigh.confirmed := true
+            
+            if s2Low < c.s2PivotLow.price or na(c.s2PivotLow.price)
+                c.s2PivotLow.price := s2Low
+                c.s2PivotLow.barIndex := bar_index
+                c.s2PivotLow.time := time
+                c.s2PivotLow.confirmed := true
+
+// @function Checks if cycle should be completed
+// @param c CycleData to check
+// @param durMin Duration in minutes
+// @returns True if cycle should complete
+export method shouldComplete(CycleData c, int durMin) =>
+    if not c.active or na(c.startTime)
+        false
+    else
+        elapsedTime = time - c.startTime
+        targetDuration = durMin * 60000  // Convert minutes to milliseconds
+        elapsedTime >= targetDuration
+
+// @function Completes current cycle and saves to history
+// @param m CycleManager to process
+// @returns void
+export method completeCycle(CycleManager m) =>
+    // Create deep copies of pivot points
+    mainHighCopy = createPivot(m.current.mainPivotHigh.price, m.current.mainPivotHigh.barIndex, m.current.mainPivotHigh.time)
+    mainLowCopy = createPivot(m.current.mainPivotLow.price, m.current.mainPivotLow.barIndex, m.current.mainPivotLow.time)
+    s1HighCopy = createPivot(m.current.s1PivotHigh.price, m.current.s1PivotHigh.barIndex, m.current.s1PivotHigh.time)
+    s1LowCopy = createPivot(m.current.s1PivotLow.price, m.current.s1PivotLow.barIndex, m.current.s1PivotLow.time)
+    s2HighCopy = createPivot(m.current.s2PivotHigh.price, m.current.s2PivotHigh.barIndex, m.current.s2PivotHigh.time)
+    s2LowCopy = createPivot(m.current.s2PivotLow.price, m.current.s2PivotLow.barIndex, m.current.s2PivotLow.time)
+    
+    savedCycle = CycleData.new(
+        m.current.startTime, m.current.startBar, 
+        mainHighCopy, mainLowCopy, 
+        s1HighCopy, s1LowCopy, 
+        s2HighCopy, s2LowCopy, 
+        true
+    )
+    
+    array.push(m.history, savedCycle)
+    m.current.startCycle()
+
+// @function Cleans up old cycle history
+// @param m CycleManager to clean
+// @param maxHistory Maximum history to keep
+// @returns void
+export method cleanupHistory(CycleManager m, int maxHistory = 3) =>
+    while array.size(m.history) > maxHistory
+        array.remove(m.history, 0)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              SESSION MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @function Starts a daily trading session
+// @param s DailySession to start
+// @returns void
+export method startDailySession(DailySession s) =>
+    s.startTime := time
+    s.mainHigh := createPivot(na, na, na)
+    s.mainLow := createPivot(na, na, na)
+    s.s1High := createPivot(na, na, na)
+    s.s1Low := createPivot(na, na, na)
+    s.s2High := createPivot(na, na, na)
+    s.s2Low := createPivot(na, na, na)
+    s.active := true
+
+// @function Updates session pivots with current bar data
+// @param s DailySession to update
+// @param mainHigh Current main chart high
+// @param mainLow Current main chart low
+// @param s1High Symbol 1 high (optional)
+// @param s1Low Symbol 1 low (optional)
+// @param s2High Symbol 2 high (optional)
+// @param s2Low Symbol 2 low (optional)
+// @returns void
+export method updateDailySessionPivots(DailySession s, float mainHigh, float mainLow, 
+                                        float s1High = na, float s1Low = na, 
+                                        float s2High = na, float s2Low = na) =>
+    if s.active
+        if mainHigh > s.mainHigh.price or na(s.mainHigh.price)
+            s.mainHigh.price := mainHigh
+            s.mainHigh.barIndex := bar_index
+            s.mainHigh.time := time
+            s.mainHigh.confirmed := true
+        
+        if mainLow < s.mainLow.price or na(s.mainLow.price)
+            s.mainLow.price := mainLow
+            s.mainLow.barIndex := bar_index
+            s.mainLow.time := time
+            s.mainLow.confirmed := true
+        
+        if not na(s1High) and not na(s1Low)
+            if s1High > s.s1High.price or na(s.s1High.price)
+                s.s1High.price := s1High
+                s.s1High.barIndex := bar_index
+                s.s1High.time := time
+                s.s1High.confirmed := true
+            
+            if s1Low < s.s1Low.price or na(s.s1Low.price)
+                s.s1Low.price := s1Low
+                s.s1Low.barIndex := bar_index
+                s.s1Low.time := time
+                s.s1Low.confirmed := true
+        
+        if not na(s2High) and not na(s2Low)
+            if s2High > s.s2High.price or na(s.s2High.price)
+                s.s2High.price := s2High
+                s.s2High.barIndex := bar_index
+                s.s2High.time := time
+                s.s2High.confirmed := true
+            
+            if s2Low < s.s2Low.price or na(s.s2Low.price)
+                s.s2Low.price := s2Low
+                s.s2Low.barIndex := bar_index
+                s.s2Low.time := time
+                s.s2Low.confirmed := true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              SMT DETECTION LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @function Detects SMT divergence between two price points
+// @param mCurr Current main price
+// @param mPrev Previous main price
+// @param cCurr Current comparison price
+// @param cPrev Previous comparison price
+// @param isBearish True for bearish SMT detection
+// @param isInverse True for inverse SMT detection
+// @returns True if SMT detected
+export detectSMT(float mCurr, float mPrev, float cCurr, float cPrev, bool isBearish, bool isInverse = false) =>
+    if na(mCurr) or na(mPrev) or na(cCurr) or na(cPrev)
+        false
+    else
+        if isInverse
+            // Inverse: Comparison leads, Main lags
+            isBearish ? (cCurr > cPrev and mCurr < mPrev) : (cCurr < cPrev and mCurr > mPrev)
+        else
+            // Normal: Main leads, Comparison lags
+            isBearish ? (mCurr > mPrev and cCurr < cPrev) : (mCurr < mPrev and cCurr > cPrev)
+
+// @function Checks if SMT pattern has been invalidated
+// @param mainPrice Original main chart price
+// @param compPrice Original comparison price
+// @param currMain Current main price
+// @param currComp Current comparison price
+// @param isBearish True if bearish SMT
+// @param isInverse True if inverse SMT
+// @returns True if pattern is invalidated
+export isSmtInvalidated(float mainPrice, float compPrice, float currMain, float currComp, 
+                         bool isBearish, bool isInverse = false) =>
+    if na(currComp) or na(currMain)
+        false
+    else
+        if isInverse
+            // Inverse invalidation logic
+            isBearish ? (currComp < compPrice or currMain > mainPrice) : (currComp > compPrice or currMain < mainPrice)
+        else
+            // Normal invalidation logic
+            isBearish ? currComp > compPrice : currComp < compPrice
+
+// @function Gets SMT type ID based on parameters
+// @param symbolNum Symbol number (1 or 2)
+// @param isHigh True for high pivot, false for low
+// @param isInverse True for inverse SMT
+// @returns SMT type ID (0-7)
+export getSmtTypeId(int symbolNum, bool isHigh, bool isInverse = false) =>
+    baseId = symbolNum == 1 ? (isHigh ? 0 : 1) : (isHigh ? 2 : 3)
+    isInverse ? baseId + 4 : baseId
+
+// @function Checks all SMT types for current vs previous cycle
+// @param curr Current cycle data
+// @param prev Previous cycle data
+// @param s1Enabled Symbol 1 enabled
+// @param s2Enabled Symbol 2 enabled
+// @returns Array of detected SMT type IDs
+export detectCycleSMTs(CycleData curr, CycleData prev, bool s1Enabled, bool s2Enabled) =>
+    smtTypes = array.new<int>()
+    
+    // Symbol 1 SMTs
+    if s1Enabled
+        // Bearish High Normal (Type 0)
+        if detectSMT(curr.mainPivotHigh.price, prev.mainPivotHigh.price, 
+                     curr.s1PivotHigh.price, prev.s1PivotHigh.price, true, false)
+            array.push(smtTypes, 0)
+        
+        // Bullish Low Normal (Type 1)
+        if detectSMT(curr.mainPivotLow.price, prev.mainPivotLow.price, 
+                     curr.s1PivotLow.price, prev.s1PivotLow.price, false, false)
+            array.push(smtTypes, 1)
+        
+        // Bearish High Inverse (Type 4)
+        if detectSMT(curr.mainPivotHigh.price, prev.mainPivotHigh.price, 
+                     curr.s1PivotHigh.price, prev.s1PivotHigh.price, true, true)
+            array.push(smtTypes, 4)
+        
+        // Bullish Low Inverse (Type 5)
+        if detectSMT(curr.mainPivotLow.price, prev.mainPivotLow.price, 
+                     curr.s1PivotLow.price, prev.s1PivotLow.price, false, true)
+            array.push(smtTypes, 5)
+    
+    // Symbol 2 SMTs
+    if s2Enabled
+        // Bearish High Normal (Type 2)
+        if detectSMT(curr.mainPivotHigh.price, prev.mainPivotHigh.price, 
+                     curr.s2PivotHigh.price, prev.s2PivotHigh.price, true, false)
+            array.push(smtTypes, 2)
+        
+        // Bullish Low Normal (Type 3)
+        if detectSMT(curr.mainPivotLow.price, prev.mainPivotLow.price, 
+                     curr.s2PivotLow.price, prev.s2PivotLow.price, false, false)
+            array.push(smtTypes, 3)
+        
+        // Bearish High Inverse (Type 6)
+        if detectSMT(curr.mainPivotHigh.price, prev.mainPivotHigh.price, 
+                     curr.s2PivotHigh.price, prev.s2PivotHigh.price, true, true)
+            array.push(smtTypes, 6)
+        
+        // Bullish Low Inverse (Type 7)
+        if detectSMT(curr.mainPivotLow.price, prev.mainPivotLow.price, 
+                     curr.s2PivotLow.price, prev.s2PivotLow.price, false, true)
+            array.push(smtTypes, 7)
+    
+    smtTypes
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                              UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// @function Gets pivot data for SMT type
+// @param curr Current cycle
+// @param prev Previous cycle
+// @param smtTypeId SMT type ID (0-7)
+// @returns [prevBar, prevTime, prevPrice, currBar, currTime, currPrice, compPrice]
+export getCyclePivotData(CycleData curr, CycleData prev, int smtTypeId) =>
+    isS1 = smtTypeId == 0 or smtTypeId == 1 or smtTypeId == 4 or smtTypeId == 5
+    isHigh = smtTypeId == 0 or smtTypeId == 2 or smtTypeId == 4 or smtTypeId == 6
+    
+    prevPivot = isHigh ? prev.mainPivotHigh : prev.mainPivotLow
+    currPivot = isHigh ? curr.mainPivotHigh : curr.mainPivotLow
+    compPivot = isS1 ? (isHigh ? curr.s1PivotHigh : curr.s1PivotLow) : (isHigh ? curr.s2PivotHigh : curr.s2PivotLow)
+    
+    [prevPivot.barIndex, prevPivot.time, prevPivot.price, 
+     currPivot.barIndex, currPivot.time, currPivot.price, 
+     compPivot.price]
+
+// @function Checks if pivot data is valid
+// @param pivot PivotPoint to check
+// @returns True if pivot has valid data
+export isPivotValid(PivotPoint pivot) =>
+    not na(pivot.price) and not na(pivot.barIndex) and not na(pivot.time) and pivot.confirmed
