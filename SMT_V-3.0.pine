@@ -116,7 +116,7 @@ showNYPMSession = input.bool(true, "Show NY PM Session SMTs", group="Session SMT
 maxSessionSMTs = input.int(3, "Max Session SMTs per Session", minval=1, maxval=10, group="Session SMT")
 
 maxTotalLines = input.int(4, "Max Total SMT Lines", minval=1, maxval=20, group="Display")
-labelOffset = input.int(50, "Label Offset (Pips/Points)", minval=5, maxval=500, tooltip="Distance of labels from SMT lines. Uses mintick multiplication (50 = 5 pips for forex, ~12.5 pts for NQ/ES)", group="Display")
+labelOffset = input.int(25, "Label Offset (Pips/Points)", minval=5, maxval=500, tooltip="Distance of labels from SMT lines. Uses mintick multiplication (25 = 2.5 pips for forex, ~6.25 pts for NQ/ES)", group="Display")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              ALERTS
@@ -221,7 +221,7 @@ var array<CycleManager> managers = array.new<CycleManager>()
 // For forex (5-digit brokers): syminfo.mintick = 0.00001, so 50 = 5 pips
 // For indices/crypto: syminfo.mintick varies, this adapts automatically
 labelBaseOffset = labelOffset * syminfo.mintick  // User-defined base offset from line (recalculates every bar)
-labelStackSpacing = (labelOffset * 0.6) * syminfo.mintick  // 60% of base for stack spacing (recalculates every bar)
+labelStackSpacing = (labelOffset * 0.3) * syminfo.mintick  // 30% of base for stack spacing (recalculates every bar)
 var array<LineMetadata> lines = array.new<LineMetadata>()
 var array<DailySession> dailySessions = array.new<DailySession>()
 var int lastDay = na
@@ -623,10 +623,11 @@ processSMT(m) =>
             bullishSmtDetected = false
             
             // Compare current cycle against previous completed cycles
-            // 3-min cycle: only compare last 2 cycles
+            // 3-min cycle: only compare last 1 cycle (most recent)
+            // 10-min cycle: only compare last 2 cycles
             // Other cycles: compare all cycles (up to 10)
-            maxCompare = m.duration == 3 ? math.min(2, array.size(m.history)) : array.size(m.history)
-            startIdx = m.duration == 3 ? math.max(0, array.size(m.history) - maxCompare) : 0
+            maxCompare = m.duration == 3 ? math.min(1, array.size(m.history)) : (m.duration == 10 ? math.min(2, array.size(m.history)) : array.size(m.history))
+            startIdx = m.duration == 3 ? math.max(0, array.size(m.history) - 1) : (m.duration == 10 ? math.max(0, array.size(m.history) - 2) : 0)
             
             for prevIdx = startIdx to array.size(m.history) - 1
                 prev = array.get(m.history, prevIdx)
@@ -821,8 +822,8 @@ compareSessionSMT(curr, prev) =>
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Track day changes
-currentDay = dayofmonth(time)
+// Track day changes - Use 18:00 as day boundary (futures true day open)
+currentDay = hour(time) >= 18 ? dayofmonth(time) : dayofmonth(time) - 1
 var bool weeklyResetDone = false
 
 // Check if it's Friday 4 PM NY time or later
@@ -835,48 +836,32 @@ if isFridayReset and not weeklyResetDone
     for i = 0 to array.size(managers) - 1
         m = array.get(managers, i)
         
-        // Weekly reset for 90min and 30min cycles only
-        if m.duration == 90 or m.duration == 30
-            array.clear(m.history)
-            m.current.active := false
-            // Clear lines for these cycles
-            if array.size(lines) > 0
-                toRemove = array.new<int>()
-                for j = 0 to array.size(lines) - 1
-                    meta = array.get(lines, j)
-                    if meta.cycleLabel == m.label
-                        array.push(toRemove, j)
-                if array.size(toRemove) > 0
-                    for j = array.size(toRemove) - 1 to 0
-                        old = array.remove(lines, array.get(toRemove, j))
-                        line.delete(old.lineObj)
-                        label.delete(old.labelObj)
+        // Weekly reset removed - now using daily reset for all cycles
 
 // Reset the weekly flag when we're past Friday or before 4 PM
 if not isFridayReset and weeklyResetDone
     weeklyResetDone := false
 
-// Daily reset logic
+// Daily reset logic - reset ALL cycles at midnight
 if currentDay != lastDay and not na(lastDay)
     for i = 0 to array.size(managers) - 1
         m = array.get(managers, i)
         
-        // Daily reset for 3min and 10min cycles
-        if m.duration == 3 or m.duration == 10
-            array.clear(m.history)
-            m.current.active := false
-            // Clear lines for these cycles
-            if array.size(lines) > 0
-                toRemove = array.new<int>()
-                for j = 0 to array.size(lines) - 1
-                    meta = array.get(lines, j)
-                    if meta.cycleLabel == m.label
-                        array.push(toRemove, j)
-                if array.size(toRemove) > 0
-                    for j = array.size(toRemove) - 1 to 0
-                        old = array.remove(lines, array.get(toRemove, j))
-                        line.delete(old.lineObj)
-                        label.delete(old.labelObj)
+        // Daily reset for ALL cycles (90min, 30min, 10min, 3min)
+        array.clear(m.history)
+        m.current.active := false
+        // Clear lines for these cycles
+        if array.size(lines) > 0
+            toRemove = array.new<int>()
+            for j = 0 to array.size(lines) - 1
+                meta = array.get(lines, j)
+                if meta.cycleLabel == m.label
+                    array.push(toRemove, j)
+            if array.size(toRemove) > 0
+                for j = array.size(toRemove) - 1 to 0
+                    old = array.remove(lines, array.get(toRemove, j))
+                    line.delete(old.lineObj)
+                    label.delete(old.labelObj)
     
     // Reset all daily sessions (except active ones spanning midnight)
     for i = 0 to array.size(dailySessions) - 1
