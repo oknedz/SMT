@@ -378,38 +378,63 @@ markLinesAsHistorical(cycleLabel, cycleStartBar) =>
                 meta.isForCurrentCycle := false
 
 repositionAllLabels() =>
-    // Reposition all labels to ensure proper stacking after any change
+    // Reposition all labels - combine labels that end on the same bar
     if array.size(lines) > 0
+        // Group lines by end bar and direction
+        processedKeys = array.new<string>()
+        
         for i = 0 to array.size(lines) - 1
             meta = array.get(lines, i)
             
-            // Get line end coordinates (right side of line)
+            // Get line end coordinates
             x2 = line.get_x2(meta.lineObj)
             y2 = line.get_y2(meta.lineObj)
             
-            // Calculate stack position for this label
-            stackPosition = 0
-            cycleOrder = meta.cycleLabel == "90" ? 0 : (meta.cycleLabel == "30" ? 1 : (meta.cycleLabel == "10" ? 2 : (meta.cycleLabel == "3" ? 3 : 4)))
+            // Create unique key for this bar + direction
+            barKey = str.tostring(x2) + "_" + str.tostring(meta.isBearish)
             
-            // Count ALL labels (regardless of position) with same cycle to determine unique stack level
-            for j = 0 to array.size(lines) - 1
-                if j != i
+            // Check if we already processed this bar+direction
+            alreadyProcessed = false
+            if array.size(processedKeys) > 0
+                for k = 0 to array.size(processedKeys) - 1
+                    if array.get(processedKeys, k) == barKey
+                        alreadyProcessed := true
+                        break
+            
+            if not alreadyProcessed
+                // Find all lines ending at same bar with same direction
+                combinedText = ""
+                cycleOrder = meta.cycleLabel == "90" ? 0 : (meta.cycleLabel == "30" ? 1 : (meta.cycleLabel == "10" ? 2 : (meta.cycleLabel == "3" ? 3 : 4)))
+                
+                for j = 0 to array.size(lines) - 1
                     checkMeta = array.get(lines, j)
-                    // Only stack with same bearish/bullish direction
-                    if checkMeta.isBearish == meta.isBearish
-                        checkOrder = checkMeta.cycleLabel == "90" ? 0 : (checkMeta.cycleLabel == "30" ? 1 : (checkMeta.cycleLabel == "10" ? 2 : (checkMeta.cycleLabel == "3" ? 3 : 4)))
-                        // Count lower priority labels (they go below)
-                        if checkOrder > cycleOrder
-                            stackPosition += 1
-            
-            // Use fixed pip/point spacing
-            stackOffset = stackPosition * labelStackSpacing
-            
-            // For bearish: positive = above line. For bullish: negative = below line
-            totalOffset = meta.isBearish ? (labelBaseOffset + stackOffset) : -(labelBaseOffset + stackOffset)
-            
-            // Position label at right side of line (end point) with vertical offset
-            label.set_xy(meta.labelObj, x2, y2 + totalOffset)
+                    checkX2 = line.get_x2(checkMeta.lineObj)
+                    
+                    // If same end bar and same direction
+                    if checkX2 == x2 and checkMeta.isBearish == meta.isBearish
+                        // Hide this label (we'll show combined label on first one only)
+                        if j != i
+                            label.set_text(checkMeta.labelObj, "")
+                        else
+                            // Build combined text for first label
+                            isSessionLabel = meta.cycleLabel == "ASIA" or meta.cycleLabel == "LONDON" or meta.cycleLabel == "NY-AM" or meta.cycleLabel == "NY-PM"
+                            if combinedText == ""
+                                combinedText := isSessionLabel ? meta.cycleLabel + " " + meta.symbols : meta.cycleLabel + "m " + meta.symbols
+                            else
+                                // Add to combined text
+                                suffix = isSessionLabel ? checkMeta.cycleLabel + " " + checkMeta.symbols : checkMeta.cycleLabel + "m " + checkMeta.symbols
+                                combinedText := combinedText + " + " + suffix
+                
+                // Set combined text on first label
+                if combinedText != ""
+                    label.set_text(meta.labelObj, combinedText)
+                
+                // Position label
+                totalOffset = meta.isBearish ? labelBaseOffset : -labelBaseOffset
+                label.set_xy(meta.labelObj, x2, y2 + totalOffset)
+                
+                // Mark this bar+direction as processed
+                array.push(processedKeys, barKey)
 
 completeCycle(m) =>
     // Mark existing lines for this cycle as historical BEFORE starting new cycle
@@ -474,38 +499,28 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
         if array.size(lines) > 0
             for i = 0 to array.size(lines) - 1
                 m = array.get(lines, i)
-                // Check if this is same cycle, same direction, and for current cycle
-                if m.isBearish == bearish and m.cycleLabel == cycleLabel and m.isForCurrentCycle
-                    // Merge symbols instead of replacing
+                // Check if this is EXACT SAME symbol, cycle, and direction
+                if m.isBearish == bearish and m.cycleLabel == cycleLabel and m.isForCurrentCycle and m.symbols == symbolStr
+                    // Update existing line for this specific symbol
                     mergeIdx := i
                     shouldAdd := false
                     break
         
         isNew = false
         if mergeIdx >= 0
-            // Merge with existing SMT
+            // Update existing SMT line for this symbol
             existing = array.get(lines, mergeIdx)
             
-            // Always update if line is longer/better (even if symbol already exists)
-            if newLen > existing.length
-                // Redraw the line with better coordinates
-                line.delete(existing.lineObj)
-                existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=line.style_solid)
-                existing.length := newLen
-                existing.mainPrice := price1
-                existing.compPrice := compPrice
-                // Don't update label position here - it's handled below
+            // Always redraw the line with new coordinates (intra-cycle may have different endpoints)
+            line.delete(existing.lineObj)
+            existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=line.style_solid)
+            existing.length := newLen
+            existing.mainPrice := price1
+            existing.compPrice := compPrice
             
-            // Add symbol if not already present
-            if str.contains(existing.symbols, symbolStr) == false
-                newSymbols = existing.symbols + " + " + symbolStr
-                // Add "m" only for numeric cycle labels (90, 30, 10, 3), not for session labels (ASIA, LONDON, NY-AM, NY-PM)
-                isSessionLabel = cycleLabel == "ASIA" or cycleLabel == "LONDON" or cycleLabel == "NY-AM" or cycleLabel == "NY-PM"
-                labelText = isSessionLabel ? cycleLabel + " " + newSymbols : cycleLabel + "m " + newSymbols
-                label.set_text(existing.labelObj, labelText)
-                existing.symbols := newSymbols
+            // Symbol already matches, just update coordinates (no label change needed)
             
-            // Always reposition all labels after merge to ensure proper stacking
+            // Always reposition all labels after update to ensure proper stacking
             repositionAllLabels()
             
             isNew := false
@@ -607,21 +622,21 @@ processSMT(m) =>
     // Process SMT when we have at least one completed cycle in history
     // Returns [bearishDetected, bullishDetected] for alert tracking
     
-    // Need at least one completed cycle to compare against
-    if array.size(m.history) == 0
+    curr = m.current
+    
+    // REAL-TIME: Check if current cycle has started and has valid data
+    if na(curr.startTime)
         [false, false]
     else
-        curr = m.current
+        // Track if new SMT detected
+        bearishSmtDetected = false
+        bullishSmtDetected = false
         
-        // FIXED: Check if current cycle has started and has valid data
-        // Allow processing even if cycle is active (for real-time updates)
-        if na(curr.startTime)
-            [false, false]
-        else
-            // Track if new SMT detected
-            bearishSmtDetected = false
-            bullishSmtDetected = false
-            
+        // INTRA-CYCLE DETECTION removed from here - now done in main execution loop before updateCyclePivots
+        
+        // INTER-CYCLE DETECTION (compare against completed cycles)
+        hasHistory = array.size(m.history) > 0
+        if hasHistory
             // Compare current cycle against previous completed cycles
             // 3-min cycle: only compare last 1 cycle (most recent)
             // 10-min cycle: only compare last 2 cycles
@@ -702,6 +717,9 @@ processSMT(m) =>
             while array.size(m.history) > 10
                 array.remove(m.history, 0)
             
+            [bearishSmtDetected, bullishSmtDetected]
+        else
+            // No history - only intra-cycle detection active
             [bearishSmtDetected, bullishSmtDetected]
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -906,14 +924,81 @@ if inSession()
         if not m.current.active
             startCycle(m.current)
         
+        // Save previous state BEFORE updating
+        prevMainHigh = m.current.mainPivotHigh.price
+        prevMainLow = m.current.mainPivotLow.price
+        prevS1High = m.current.s1PivotHigh.price
+        prevS1Low = m.current.s1PivotLow.price
+        prevS2High = m.current.s2PivotHigh.price
+        prevS2Low = m.current.s2PivotLow.price
+        prevMainHighBar = m.current.mainPivotHigh.barIndex
+        prevMainLowBar = m.current.mainPivotLow.barIndex
+        prevMainHighTime = m.current.mainPivotHigh.time
+        prevMainLowTime = m.current.mainPivotLow.time
+        prevS1HighBar = m.current.s1PivotHigh.barIndex
+        prevS1LowBar = m.current.s1PivotLow.barIndex
+        prevS2HighBar = m.current.s2PivotHigh.barIndex
+        prevS2LowBar = m.current.s2PivotLow.barIndex
+        prevS1HighTime = m.current.s1PivotHigh.time
+        prevS1LowTime = m.current.s1PivotLow.time
+        prevS2HighTime = m.current.s2PivotHigh.time
+        prevS2LowTime = m.current.s2PivotLow.time
+        
         updateCyclePivots(m.current)
+        
+        // Check invalidation after updating pivots (removes lines if divergence disappears)
+        checkInvalidation()
+        
+        // Detect intra-cycle SMT: Compare current ACTIVE cycle vs last COMPLETED cycle
+        // This gives real-time updates as current cycle develops
+        if array.size(m.history) > 0
+            curr = m.current
+            lastCompleted = array.get(m.history, array.size(m.history) - 1)
+            
+            // Bearish: Current cycle's high > Last completed cycle's high, but comparison symbol's high < last completed
+            if not na(curr.mainPivotHigh.price) and not na(lastCompleted.mainPivotHigh.price)
+                if curr.mainPivotHigh.price > lastCompleted.mainPivotHigh.price
+                    // Symbol1 failed to make new high
+                    if enableSymbol1 and not na(curr.s1PivotHigh.price) and not na(lastCompleted.s1PivotHigh.price)
+                        if curr.s1PivotHigh.price < lastCompleted.s1PivotHigh.price
+                            smtDrawn = drawSMT(lastCompleted.mainPivotHigh.barIndex, lastCompleted.mainPivotHigh.time, lastCompleted.mainPivotHigh.price, curr.mainPivotHigh.barIndex, curr.mainPivotHigh.time, curr.mainPivotHigh.price, s1Abbr, m.label, true, 0, curr.s1PivotHigh.price, curr.startBar)
+                            if smtDrawn
+                                alert90minBearish := m.label == "90" and enable90minAlerts
+                                alert30minBearish := m.label == "30" and enable30minAlerts
+                    
+                    // Symbol2 failed to make new high
+                    if enableSymbol2 and not na(curr.s2PivotHigh.price) and not na(lastCompleted.s2PivotHigh.price)
+                        if curr.s2PivotHigh.price < lastCompleted.s2PivotHigh.price
+                            smtDrawn = drawSMT(lastCompleted.mainPivotHigh.barIndex, lastCompleted.mainPivotHigh.time, lastCompleted.mainPivotHigh.price, curr.mainPivotHigh.barIndex, curr.mainPivotHigh.time, curr.mainPivotHigh.price, s2Abbr, m.label, true, 2, curr.s2PivotHigh.price, curr.startBar)
+                            if smtDrawn
+                                alert90minBearish := m.label == "90" and enable90minAlerts
+                                alert30minBearish := m.label == "30" and enable30minAlerts
+            
+            // Bullish: Current cycle's low < Last completed cycle's low, but comparison symbol's low > last completed
+            if not na(curr.mainPivotLow.price) and not na(lastCompleted.mainPivotLow.price)
+                if curr.mainPivotLow.price < lastCompleted.mainPivotLow.price
+                    // Symbol1 failed to make new low
+                    if enableSymbol1 and not na(curr.s1PivotLow.price) and not na(lastCompleted.s1PivotLow.price)
+                        if curr.s1PivotLow.price > lastCompleted.s1PivotLow.price
+                            smtDrawn = drawSMT(lastCompleted.mainPivotLow.barIndex, lastCompleted.mainPivotLow.time, lastCompleted.mainPivotLow.price, curr.mainPivotLow.barIndex, curr.mainPivotLow.time, curr.mainPivotLow.price, s1Abbr, m.label, false, 1, curr.s1PivotLow.price, curr.startBar)
+                            if smtDrawn
+                                alert90minBullish := m.label == "90" and enable90minAlerts
+                                alert30minBullish := m.label == "30" and enable30minAlerts
+                    
+                    // Symbol2 failed to make new low
+                    if enableSymbol2 and not na(curr.s2PivotLow.price) and not na(lastCompleted.s2PivotLow.price)
+                        if curr.s2PivotLow.price > lastCompleted.s2PivotLow.price
+                            smtDrawn = drawSMT(lastCompleted.mainPivotLow.barIndex, lastCompleted.mainPivotLow.time, lastCompleted.mainPivotLow.price, curr.mainPivotLow.barIndex, curr.mainPivotLow.time, curr.mainPivotLow.price, s2Abbr, m.label, false, 3, curr.s2PivotLow.price, curr.startBar)
+                            if smtDrawn
+                                alert90minBullish := m.label == "90" and enable90minAlerts
+                                alert30minBullish := m.label == "30" and enable30minAlerts
         
         cycleCompleted = shouldComplete(m.current, m.duration)
         
         if cycleCompleted
             completeCycle(m)
         
-        // Always process SMT to detect/update in real-time
+        // Process inter-cycle SMT
         [bearish, bullish] = processSMT(m)
         if bearish
             if m.label == "90" and enable90minAlerts
