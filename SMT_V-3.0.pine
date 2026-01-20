@@ -189,31 +189,9 @@ type DailySession
 s1_normalized = ticker.standard(symbol1)
 s2_normalized = ticker.standard(symbol2)
 
-[s1_high_raw, s1_low_raw, s1_close_raw] = request.security(s1_normalized, timeframe.period, [high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
-[s2_high_raw, s2_low_raw, s2_close_raw] = request.security(s2_normalized, timeframe.period, [high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
-
-// Handle NA values better - use last known values when data is missing
-var float s1_high_last = na
-var float s1_low_last = na
-var float s2_high_last = na
-var float s2_low_last = na
-
-s1_high = na(s1_high_raw) ? s1_high_last : s1_high_raw
-s1_low = na(s1_low_raw) ? s1_low_last : s1_low_raw
-s1_close = na(s1_close_raw) ? nz(s1_close_raw, close) : s1_close_raw
-s2_high = na(s2_high_raw) ? s2_high_last : s2_high_raw
-s2_low = na(s2_low_raw) ? s2_low_last : s2_low_raw
-s2_close = na(s2_close_raw) ? nz(s2_close_raw, close) : s2_close_raw
-
-// Update last known values
-if not na(s1_high_raw)
-    s1_high_last := s1_high_raw
-if not na(s1_low_raw)
-    s1_low_last := s1_low_raw
-if not na(s2_high_raw)
-    s2_high_last := s2_high_raw
-if not na(s2_low_raw)
-    s2_low_last := s2_low_raw
+// Use gaps_off to automatically handle missing data (replaces manual latching)
+[s1_high, s1_low, s1_close] = request.security(s1_normalized, timeframe.period, [high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[s2_high, s2_low, s2_close] = request.security(s2_normalized, timeframe.period, [high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
 
 var array<CycleManager> managers = array.new<CycleManager>()
 
@@ -235,6 +213,13 @@ bool alert90minBullish = false
 bool alert30minBearish = false
 bool alert30minBullish = false
 
+// Optimization flag
+// Optimization flag (wrapped in array to allow modification in functions)
+// Index 0: needsReposition
+var array<bool> stateFlags = array.from(false)
+
+
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -255,6 +240,9 @@ getAbbr(sym) =>
         // For other symbols (MESZ2024, BTCUSDT, etc), take first 4 chars
         str.substring(clean, 0, math.min(str.length(clean), 4))
 
+// Cache monthly contract check to avoid repeated string parsing
+var bool isMonthlyContract = str.contains(syminfo.ticker, "Z") or str.contains(syminfo.ticker, "H") or str.contains(syminfo.ticker, "M") or str.contains(syminfo.ticker, "U")
+
 // FIXED: Better session handling for different contract types
 inSession() => 
     if not enableSession
@@ -262,9 +250,6 @@ inSession() =>
     else
         // Check if we're in session for the main chart - use "" for chart timeframe
         mainInSession = not na(time("", sessionStart, sessionTimezone))
-        // For monthly contracts, be more lenient with session times
-        // as they may have different session structures
-        isMonthlyContract = str.contains(syminfo.ticker, "Z") or str.contains(syminfo.ticker, "H") or str.contains(syminfo.ticker, "M") or str.contains(syminfo.ticker, "U")
         
         if isMonthlyContract
             // For monthly contracts, allow broader session window
@@ -280,6 +265,20 @@ calcLen(bar1, price1, bar2, price2) =>
 
 createPivot(float price, int barIdx, int t) =>
     PivotPoint.new(price, barIdx, t, true)
+
+// Priority helper for deletion logic
+getPriority(string lbl) =>
+    if lbl == "90"
+        90
+    else if lbl == "30"
+        30
+    else if lbl == "10"
+        10
+    else if lbl == "3"
+        3
+    else
+        1 // Sessions have lowest priority
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              INITIALIZATION
@@ -484,7 +483,7 @@ isInvalidated(meta, isS1, isHigh, bearish, inverse, currMain, currComp) =>
         else
             bearish ? currComp > meta.compPrice : currComp < meta.compPrice
 
-drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish, typeId, compPrice, cycleStartBar) =>
+drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish, typeId, compPrice, cycleStartBar, bool reposition = true) =>
     if na(bar1) or na(bar2) or na(time1) or na(time2)
         false
     else
@@ -521,7 +520,10 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             // Symbol already matches, just update coordinates (no label change needed)
             
             // Always reposition all labels after update to ensure proper stacking
-            repositionAllLabels()
+            if reposition
+                array.set(stateFlags, 0, true)
+
+
             
             isNew := false
         else if shouldAdd
@@ -564,12 +566,29 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             array.push(lines, LineMetadata.new(l, lab, bearish, newLen, typeId, price1, compPrice, symbolStr, cycleLabel, cycleStartBar, true))
             
             while array.size(lines) > maxTotalLines
-                old = array.shift(lines)
+                // Find line with lowest priority to remove
+                idxToRemove = 0
+                lowestPriority = 999
+                
+                for i = 0 to array.size(lines) - 1
+                    checkLn = array.get(lines, i)
+                    p = getPriority(checkLn.cycleLabel)
+                    
+                    // Strict less than ensures we keep the distinct oldest if priorities match (FIFO within priority)
+                    if p < lowestPriority
+                        lowestPriority := p
+                        idxToRemove := i
+                
+                old = array.remove(lines, idxToRemove)
                 line.delete(old.lineObj)
                 label.delete(old.labelObj)
+
             
             // Reposition all labels after adding new one
-            repositionAllLabels()
+            if reposition
+                array.set(stateFlags, 0, true)
+
+
             
             isNew := true
         isNew
@@ -598,7 +617,10 @@ checkInvalidation() =>
                 line.delete(old.lineObj)
                 label.delete(old.labelObj)
             // Reposition remaining labels after deletion
-            repositionAllLabels()
+            // Reposition remaining labels after deletion
+            array.set(stateFlags, 0, true)
+
+
 
 updateExistingLines(m) =>
     curr = m.current
@@ -666,57 +688,60 @@ processSMT(m) =>
                     // Bearish High Normal
                     if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS1High.price) and not na(cycPrevS1High.price)
                         if currMainHigh.price > cycPrevMainHigh.price and currS1High.price < cycPrevS1High.price
-                            smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 0, currS1High.price, curr.startBar)
+                            smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 0, currS1High.price, curr.startBar, reposition = false)
                             if smtDrawn
                                 bearishSmtDetected := true
                     
                     // Bullish Low Normal
                     if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS1Low.price) and not na(cycPrevS1Low.price)
                         if currMainLow.price < cycPrevMainLow.price and currS1Low.price > cycPrevS1Low.price
-                            smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 1, currS1Low.price, curr.startBar)
+                            smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 1, currS1Low.price, curr.startBar, reposition = false)
                             if smtDrawn
                                 bullishSmtDetected := true
                     
                     // Bearish High Inverse
                     if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS1High.price) and not na(cycPrevS1High.price)
                         if currS1High.price > cycPrevS1High.price and currMainHigh.price < cycPrevMainHigh.price
-                            drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 4, currS1High.price, curr.startBar)
+                            drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s1Abbr, m.label, true, 4, currS1High.price, curr.startBar, reposition = false)
                     
                     // Bullish Low Inverse
                     if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS1Low.price) and not na(cycPrevS1Low.price)
                         if currS1Low.price < cycPrevS1Low.price and currMainLow.price > cycPrevMainLow.price
-                            drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 5, currS1Low.price, curr.startBar)
+                            drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s1Abbr, m.label, false, 5, currS1Low.price, curr.startBar, reposition = false)
                 
                 // Check Symbol 2 SMTs (only if enabled)
                 if enableSymbol2
                     // Bearish High Normal
                     if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS2High.price) and not na(cycPrevS2High.price)
                         if currMainHigh.price > cycPrevMainHigh.price and currS2High.price < cycPrevS2High.price
-                            smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 2, currS2High.price, curr.startBar)
+                            smtDrawn = drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 2, currS2High.price, curr.startBar, reposition = false)
                             if smtDrawn
                                 bearishSmtDetected := true
                     
                     // Bullish Low Normal
                     if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS2Low.price) and not na(cycPrevS2Low.price)
                         if currMainLow.price < cycPrevMainLow.price and currS2Low.price > cycPrevS2Low.price
-                            smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 3, currS2Low.price, curr.startBar)
+                            smtDrawn = drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 3, currS2Low.price, curr.startBar, reposition = false)
                             if smtDrawn
                                 bullishSmtDetected := true
                     
                     // Bearish High Inverse
                     if not na(currMainHigh.price) and not na(cycPrevMainHigh.price) and not na(currS2High.price) and not na(cycPrevS2High.price)
                         if currS2High.price > cycPrevS2High.price and currMainHigh.price < cycPrevMainHigh.price
-                            drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 6, currS2High.price, curr.startBar)
+                            drawSMT(cycPrevMainHigh.barIndex, cycPrevMainHigh.time, cycPrevMainHigh.price, currMainHigh.barIndex, currMainHigh.time, currMainHigh.price, s2Abbr, m.label, true, 6, currS2High.price, curr.startBar, reposition = false)
                     
                     // Bullish Low Inverse
                     if not na(currMainLow.price) and not na(cycPrevMainLow.price) and not na(currS2Low.price) and not na(cycPrevS2Low.price)
                         if currS2Low.price < cycPrevS2Low.price and currMainLow.price > cycPrevMainLow.price
-                            drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 7, currS2Low.price, curr.startBar)
+                            drawSMT(cycPrevMainLow.barIndex, cycPrevMainLow.time, cycPrevMainLow.price, currMainLow.barIndex, currMainLow.time, currMainLow.price, s2Abbr, m.label, false, 7, currS2Low.price, curr.startBar, reposition = false)
             
             // Cleanup old cycles (keep more history for comparison)
             while array.size(m.history) > 10
                 array.remove(m.history, 0)
             
+            array.set(stateFlags, 0, true)
+
+
             [bearishSmtDetected, bullishSmtDetected]
         else
             // No history - only intra-cycle detection active
@@ -787,29 +812,53 @@ compareSessionSMT(curr, prev) =>
     if not na(curr.mainHigh.price) and not na(prev.mainHigh.price)
         if enableSymbol1 and not na(curr.s1High.price) and not na(prev.s1High.price)
             if curr.mainHigh.price > prev.mainHigh.price and curr.s1High.price < prev.s1High.price
-                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s1Abbr, prev.name, true, 0, curr.s1High.price, sessionStartBar)
+                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s1Abbr, prev.name, true, 0, curr.s1High.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
             if curr.s1High.price > prev.s1High.price and curr.mainHigh.price < prev.mainHigh.price
-                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s1Abbr, prev.name, true, 4, curr.s1High.price, sessionStartBar)
+                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s1Abbr, prev.name, true, 4, curr.s1High.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
         
         if enableSymbol2 and not na(curr.s2High.price) and not na(prev.s2High.price)
             if curr.mainHigh.price > prev.mainHigh.price and curr.s2High.price < prev.s2High.price
-                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s2Abbr, prev.name, true, 2, curr.s2High.price, sessionStartBar)
+                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s2Abbr, prev.name, true, 2, curr.s2High.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
             if curr.s2High.price > prev.s2High.price and curr.mainHigh.price < prev.mainHigh.price
-                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s2Abbr, prev.name, true, 6, curr.s2High.price, sessionStartBar)
+                drawSMT(prev.mainHigh.barIndex, prev.mainHigh.time, prev.mainHigh.price, curr.mainHigh.barIndex, curr.mainHigh.time, curr.mainHigh.price, s2Abbr, prev.name, true, 6, curr.s2High.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
     
     // Compare current session low to previous session low (Bullish)
     if not na(curr.mainLow.price) and not na(prev.mainLow.price)
         if enableSymbol1 and not na(curr.s1Low.price) and not na(prev.s1Low.price)
             if curr.mainLow.price < prev.mainLow.price and curr.s1Low.price > prev.s1Low.price
-                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s1Abbr, prev.name, false, 1, curr.s1Low.price, sessionStartBar)
+                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s1Abbr, prev.name, false, 1, curr.s1Low.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
             if curr.s1Low.price < prev.s1Low.price and curr.mainLow.price > prev.mainLow.price
-                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s1Abbr, prev.name, false, 5, curr.s1Low.price, sessionStartBar)
+                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s1Abbr, prev.name, false, 5, curr.s1Low.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
         
         if enableSymbol2 and not na(curr.s2Low.price) and not na(prev.s2Low.price)
             if curr.mainLow.price < prev.mainLow.price and curr.s2Low.price > prev.s2Low.price
-                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s2Abbr, prev.name, false, 3, curr.s2Low.price, sessionStartBar)
+                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s2Abbr, prev.name, false, 3, curr.s2Low.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
             if curr.s2Low.price < prev.s2Low.price and curr.mainLow.price > prev.mainLow.price
-                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s2Abbr, prev.name, false, 7, curr.s2Low.price, sessionStartBar)
+                drawSMT(prev.mainLow.barIndex, prev.mainLow.time, prev.mainLow.price, curr.mainLow.barIndex, curr.mainLow.time, curr.mainLow.price, s2Abbr, prev.name, false, 7, curr.s2Low.price, sessionStartBar, reposition = false)
+                array.set(stateFlags, 0, true)
+
+
 
 
 
@@ -912,7 +961,10 @@ lastDay := currentDay
 checkInvalidation()
 
 // Reposition all labels on every bar to reflect input changes
-repositionAllLabels()
+
+// Reposition all labels on every bar to reflect input changes
+// Removed implicit call here, handled at end of script if needed
+
 
 if inSession()
     for i = 0 to array.size(managers) - 1
@@ -949,49 +1001,64 @@ if inSession()
         // Check invalidation after updating pivots (removes lines if divergence disappears)
         checkInvalidation()
         
+        // Check for pivot changes to optimize detection
+        bool mainHighChanged = m.current.mainPivotHigh.price != prevMainHigh
+        bool mainLowChanged = m.current.mainPivotLow.price != prevMainLow
+        bool s1HighChanged = m.current.s1PivotHigh.price != prevS1High
+        bool s1LowChanged = m.current.s1PivotLow.price != prevS1Low
+        bool s2HighChanged = m.current.s2PivotHigh.price != prevS2High
+        bool s2LowChanged = m.current.s2PivotLow.price != prevS2Low
+        
+        bool anyHighChanged = mainHighChanged or s1HighChanged or s2HighChanged
+        bool anyLowChanged = mainLowChanged or s1LowChanged or s2LowChanged
+
         // Detect intra-cycle SMT: Compare current ACTIVE cycle vs last COMPLETED cycle
         // This gives real-time updates as current cycle develops
         if array.size(m.history) > 0
             curr = m.current
             lastCompleted = array.get(m.history, array.size(m.history) - 1)
             
-            // Bearish: Current cycle's high > Last completed cycle's high, but comparison symbol's high < last completed
-            if not na(curr.mainPivotHigh.price) and not na(lastCompleted.mainPivotHigh.price)
-                if curr.mainPivotHigh.price > lastCompleted.mainPivotHigh.price
-                    // Symbol1 failed to make new high
-                    if enableSymbol1 and not na(curr.s1PivotHigh.price) and not na(lastCompleted.s1PivotHigh.price)
-                        if curr.s1PivotHigh.price < lastCompleted.s1PivotHigh.price
-                            smtDrawn = drawSMT(lastCompleted.mainPivotHigh.barIndex, lastCompleted.mainPivotHigh.time, lastCompleted.mainPivotHigh.price, curr.mainPivotHigh.barIndex, curr.mainPivotHigh.time, curr.mainPivotHigh.price, s1Abbr, m.label, true, 0, curr.s1PivotHigh.price, curr.startBar)
-                            if smtDrawn
-                                alert90minBearish := m.label == "90" and enable90minAlerts
-                                alert30minBearish := m.label == "30" and enable30minAlerts
-                    
-                    // Symbol2 failed to make new high
-                    if enableSymbol2 and not na(curr.s2PivotHigh.price) and not na(lastCompleted.s2PivotHigh.price)
-                        if curr.s2PivotHigh.price < lastCompleted.s2PivotHigh.price
-                            smtDrawn = drawSMT(lastCompleted.mainPivotHigh.barIndex, lastCompleted.mainPivotHigh.time, lastCompleted.mainPivotHigh.price, curr.mainPivotHigh.barIndex, curr.mainPivotHigh.time, curr.mainPivotHigh.price, s2Abbr, m.label, true, 2, curr.s2PivotHigh.price, curr.startBar)
-                            if smtDrawn
-                                alert90minBearish := m.label == "90" and enable90minAlerts
-                                alert30minBearish := m.label == "30" and enable30minAlerts
+            // Only run bearish checks if highs changed
+            if anyHighChanged
+                // Bearish: Current cycle's high > Last completed cycle's high, but comparison symbol's high < last completed
+                if not na(curr.mainPivotHigh.price) and not na(lastCompleted.mainPivotHigh.price)
+                    if curr.mainPivotHigh.price > lastCompleted.mainPivotHigh.price
+                        // Symbol1 failed to make new high
+                        if enableSymbol1 and not na(curr.s1PivotHigh.price) and not na(lastCompleted.s1PivotHigh.price)
+                            if curr.s1PivotHigh.price < lastCompleted.s1PivotHigh.price
+                                smtDrawn = drawSMT(lastCompleted.mainPivotHigh.barIndex, lastCompleted.mainPivotHigh.time, lastCompleted.mainPivotHigh.price, curr.mainPivotHigh.barIndex, curr.mainPivotHigh.time, curr.mainPivotHigh.price, s1Abbr, m.label, true, 0, curr.s1PivotHigh.price, curr.startBar, reposition = false)
+                                if smtDrawn
+                                    alert90minBearish := m.label == "90" and enable90minAlerts
+                                    alert30minBearish := m.label == "30" and enable30minAlerts
+                        
+                        // Symbol2 failed to make new high
+                        if enableSymbol2 and not na(curr.s2PivotHigh.price) and not na(lastCompleted.s2PivotHigh.price)
+                            if curr.s2PivotHigh.price < lastCompleted.s2PivotHigh.price
+                                smtDrawn = drawSMT(lastCompleted.mainPivotHigh.barIndex, lastCompleted.mainPivotHigh.time, lastCompleted.mainPivotHigh.price, curr.mainPivotHigh.barIndex, curr.mainPivotHigh.time, curr.mainPivotHigh.price, s2Abbr, m.label, true, 2, curr.s2PivotHigh.price, curr.startBar, reposition = false)
+                                if smtDrawn
+                                    alert90minBearish := m.label == "90" and enable90minAlerts
+                                    alert30minBearish := m.label == "30" and enable30minAlerts
             
-            // Bullish: Current cycle's low < Last completed cycle's low, but comparison symbol's low > last completed
-            if not na(curr.mainPivotLow.price) and not na(lastCompleted.mainPivotLow.price)
-                if curr.mainPivotLow.price < lastCompleted.mainPivotLow.price
-                    // Symbol1 failed to make new low
-                    if enableSymbol1 and not na(curr.s1PivotLow.price) and not na(lastCompleted.s1PivotLow.price)
-                        if curr.s1PivotLow.price > lastCompleted.s1PivotLow.price
-                            smtDrawn = drawSMT(lastCompleted.mainPivotLow.barIndex, lastCompleted.mainPivotLow.time, lastCompleted.mainPivotLow.price, curr.mainPivotLow.barIndex, curr.mainPivotLow.time, curr.mainPivotLow.price, s1Abbr, m.label, false, 1, curr.s1PivotLow.price, curr.startBar)
-                            if smtDrawn
-                                alert90minBullish := m.label == "90" and enable90minAlerts
-                                alert30minBullish := m.label == "30" and enable30minAlerts
-                    
-                    // Symbol2 failed to make new low
-                    if enableSymbol2 and not na(curr.s2PivotLow.price) and not na(lastCompleted.s2PivotLow.price)
-                        if curr.s2PivotLow.price > lastCompleted.s2PivotLow.price
-                            smtDrawn = drawSMT(lastCompleted.mainPivotLow.barIndex, lastCompleted.mainPivotLow.time, lastCompleted.mainPivotLow.price, curr.mainPivotLow.barIndex, curr.mainPivotLow.time, curr.mainPivotLow.price, s2Abbr, m.label, false, 3, curr.s2PivotLow.price, curr.startBar)
-                            if smtDrawn
-                                alert90minBullish := m.label == "90" and enable90minAlerts
-                                alert30minBullish := m.label == "30" and enable30minAlerts
+            // Only run bullish checks if lows changed
+            if anyLowChanged
+                // Bullish: Current cycle's low < Last completed cycle's low, but comparison symbol's low > last completed
+                if not na(curr.mainPivotLow.price) and not na(lastCompleted.mainPivotLow.price)
+                    if curr.mainPivotLow.price < lastCompleted.mainPivotLow.price
+                        // Symbol1 failed to make new low
+                        if enableSymbol1 and not na(curr.s1PivotLow.price) and not na(lastCompleted.s1PivotLow.price)
+                            if curr.s1PivotLow.price > lastCompleted.s1PivotLow.price
+                                smtDrawn = drawSMT(lastCompleted.mainPivotLow.barIndex, lastCompleted.mainPivotLow.time, lastCompleted.mainPivotLow.price, curr.mainPivotLow.barIndex, curr.mainPivotLow.time, curr.mainPivotLow.price, s1Abbr, m.label, false, 1, curr.s1PivotLow.price, curr.startBar, reposition = false)
+                                if smtDrawn
+                                    alert90minBullish := m.label == "90" and enable90minAlerts
+                                    alert30minBullish := m.label == "30" and enable30minAlerts
+                        
+                        // Symbol2 failed to make new low
+                        if enableSymbol2 and not na(curr.s2PivotLow.price) and not na(lastCompleted.s2PivotLow.price)
+                            if curr.s2PivotLow.price > lastCompleted.s2PivotLow.price
+                                smtDrawn = drawSMT(lastCompleted.mainPivotLow.barIndex, lastCompleted.mainPivotLow.time, lastCompleted.mainPivotLow.price, curr.mainPivotLow.barIndex, curr.mainPivotLow.time, curr.mainPivotLow.price, s2Abbr, m.label, false, 3, curr.s2PivotLow.price, curr.startBar, reposition = false)
+                                if smtDrawn
+                                    alert90minBullish := m.label == "90" and enable90minAlerts
+                                    alert30minBullish := m.label == "30" and enable30minAlerts
         
         cycleCompleted = shouldComplete(m.current, m.duration)
         
@@ -1011,6 +1078,8 @@ if inSession()
             if m.label == "30" and enable30minAlerts
                 alert30minBullish := true
         updateExistingLines(m)
+    // Removed duplicate repositionAllLabels calls, waiting for final check
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              SESSION SMT PROCESSING
@@ -1040,6 +1109,18 @@ if enableSessionSMT
                 prevSess = array.get(dailySessions, j)
                 if prevSess.enabled and not na(prevSess.mainHigh.price) and not na(prevSess.mainLow.price)
                     compareSessionSMT(sess, prevSess)
+            for j = 0 to i - 1
+                prevSess = array.get(dailySessions, j)
+                if prevSess.enabled and not na(prevSess.mainHigh.price) and not na(prevSess.mainLow.price)
+                    compareSessionSMT(sess, prevSess)
+            array.set(stateFlags, 0, true)
+
+// Final check to reposition labels if any changes occurred
+if array.get(stateFlags, 0)
+    repositionAllLabels()
+    array.set(stateFlags, 0, false)
+
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              ALERT CONDITIONS
