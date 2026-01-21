@@ -125,6 +125,8 @@ bearishSmtColor = input.color(color.rgb(148, 43, 43), "Bearish SMT", group="Disp
 // ═══════════════════════════════════════════════════════════════════════════════
 enable90minAlerts = input.bool(true, "Enable 90-min SMT Alerts", group="Alerts")
 enable30minAlerts = input.bool(true, "Enable 30-min SMT Alerts", group="Alerts")
+enable90minInvalidationAlerts = input.bool(true, "Enable 90-min Invalidation Alerts", group="Alerts")
+enable30minInvalidationAlerts = input.bool(true, "Enable 30-min Invalidation Alerts", group="Alerts")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              TYPE DEFINITIONS
@@ -146,6 +148,8 @@ type CycleData
     PivotPoint s2PivotHigh
     PivotPoint s2PivotLow
     bool active
+    bool alertedBearish
+    bool alertedBullish
 
 type CycleManager
     int duration
@@ -204,10 +208,12 @@ var string s2Abbr = ""
 var int labelsOnCurrentBar = 0  // Track labels on current bar for offset
 
 // Alert flags (reset each bar)
-bool alert90minBearish = false
-bool alert90minBullish = false
-bool alert30minBearish = false
-bool alert30minBullish = false
+string alert90minBearishSymbol = ""
+string alert90minBullishSymbol = ""
+string alert30minBearishSymbol = ""
+string alert30minBullishSymbol = ""
+string alert90minInvalidatedSymbol = ""
+string alert30minInvalidatedSymbol = ""
 
 // Optimization flag
 // Optimization flag (wrapped in array to allow modification in functions)
@@ -301,7 +307,7 @@ getCycleId(int t, int duration) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 initCycleData() =>
-    CycleData.new(na, na, createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), false)
+    CycleData.new(na, na, createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), false, false, false)
 
 initDailySession(name, sessionTime, timezone, enabled) =>
     DailySession.new(name, sessionTime, timezone, enabled, initCycleData())
@@ -336,6 +342,8 @@ startCycle(c) =>
     c.s2PivotHigh := createPivot(na, na, na)
     c.s2PivotLow := createPivot(na, na, na)
     c.active := true
+    c.alertedBearish := false
+    c.alertedBullish := false
 
 updatePivots(CycleData c) =>
     if c.active
@@ -638,9 +646,9 @@ checkAndDrawSMT(PivotPoint currMain, PivotPoint prevMain, PivotPoint currComp, P
                     detected := true
             // Bearish Inverse: Comp Higher High, Main Lower High
             if currComp.price > prevComp.price and currMain.price < prevMain.price
-                drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 4, currComp.price, startBar, reposition = false)
-                array.set(stateFlags, 0, true)
-                detected := true // Alert logic usually only tracks "Bearish SMT Detected", doesn't distinguish inverse/normal in global alert flags
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 4, currComp.price, startBar, reposition = false)
+                    array.set(stateFlags, 0, true)
+                    detected := true
         else
             // Bullish Normal: Main Lower Low, Comp Higher Low
             if currMain.price < prevMain.price and currComp.price > prevComp.price
@@ -649,13 +657,16 @@ checkAndDrawSMT(PivotPoint currMain, PivotPoint prevMain, PivotPoint currComp, P
                     detected := true
             // Bullish Inverse: Comp Lower Low, Main Higher Low
             if currComp.price < prevComp.price and currMain.price > prevMain.price
-                drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 5, currComp.price, startBar, reposition = false)
-                array.set(stateFlags, 0, true)
-                detected := true
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 5, currComp.price, startBar, reposition = false)
+                    array.set(stateFlags, 0, true)
+                    detected := true
     detected
 
 
 checkInvalidation() =>
+    inv90 = ""
+    inv30 = ""
+    
     if array.size(lines) > 0
         toRemove = array.new<int>()
         for i = 0 to array.size(lines) - 1
@@ -671,6 +682,13 @@ checkInvalidation() =>
                 
                 if not na(currMain) and not na(currComp)
                     if isInvalidated(m, isS1, isHigh, m.isBearish, inverse, currMain, currComp)
+                        // Trigger invalidation alerts for current cycle SMTs
+                        if m.isForCurrentCycle
+                            direction = m.isBearish ? "Bearish" : "Bullish"
+                            if m.cycleLabel == "90" and enable90minInvalidationAlerts
+                                inv90 := direction + " " + m.symbols
+                            else if m.cycleLabel == "30" and enable30minInvalidationAlerts
+                                inv30 := direction + " " + m.symbols
                         array.push(toRemove, i)
         
         if array.size(toRemove) > 0
@@ -681,6 +699,8 @@ checkInvalidation() =>
             // Reposition remaining labels after deletion
             // Reposition remaining labels after deletion
             array.set(stateFlags, 0, true)
+
+    [inv90, inv30]
 
 
 
@@ -890,7 +910,11 @@ if currentDay != lastDay and not na(lastDay)
 
 lastDay := currentDay
 
-checkInvalidation()
+[inv90_1, inv30_1] = checkInvalidation()
+if inv90_1 != ""
+    alert90minInvalidatedSymbol := inv90_1
+if inv30_1 != ""
+    alert30minInvalidatedSymbol := inv30_1
 
 // Reposition all labels on every bar to reflect input changes
 
@@ -932,7 +956,11 @@ if inSession()
 
         
         // Check invalidation after updating pivots (removes lines if divergence disappears)
-        checkInvalidation()
+        [inv90_2, inv30_2] = checkInvalidation()
+        if inv90_2 != ""
+            alert90minInvalidatedSymbol := inv90_2
+        if inv30_2 != ""
+            alert30minInvalidatedSymbol := inv30_2
         
         // Check for pivot changes to optimize detection
         bool mainHighChanged = m.current.mainPivotHigh.price != prevMainHigh
@@ -955,23 +983,39 @@ if inSession()
             if anyHighChanged
                 if enableSymbol1
                     if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s1PivotHigh, lastCompleted.s1PivotHigh, s1Abbr, m.label, curr.startBar, 0, true)
-                        alert90minBearish := m.label == "90" and enable90minAlerts
-                        alert30minBearish := m.label == "30" and enable30minAlerts
+                        if not curr.alertedBearish
+                            if m.label == "90" and enable90minAlerts
+                                alert90minBearishSymbol := s1Abbr
+                            else if m.label == "30" and enable30minAlerts
+                                alert30minBearishSymbol := s1Abbr
+                            curr.alertedBearish := true
                 if enableSymbol2
                     if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s2PivotHigh, lastCompleted.s2PivotHigh, s2Abbr, m.label, curr.startBar, 2, true)
-                        alert90minBearish := m.label == "90" and enable90minAlerts
-                        alert30minBearish := m.label == "30" and enable30minAlerts
+                        if not curr.alertedBearish
+                            if m.label == "90" and enable90minAlerts
+                                alert90minBearishSymbol := alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr
+                            else if m.label == "30" and enable30minAlerts
+                                alert30minBearishSymbol := alert30minBearishSymbol == "" ? s2Abbr : alert30minBearishSymbol + "+" + s2Abbr
+                            curr.alertedBearish := true
             
             // Only run bullish checks if lows changed
             if anyLowChanged
                 if enableSymbol1
                     if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s1PivotLow, lastCompleted.s1PivotLow, s1Abbr, m.label, curr.startBar, 0, false)
-                        alert90minBullish := m.label == "90" and enable90minAlerts
-                        alert30minBullish := m.label == "30" and enable30minAlerts
+                        if not curr.alertedBullish
+                            if m.label == "90" and enable90minAlerts
+                                alert90minBullishSymbol := s1Abbr
+                            else if m.label == "30" and enable30minAlerts
+                                alert30minBullishSymbol := s1Abbr
+                            curr.alertedBullish := true
                 if enableSymbol2
                     if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s2PivotLow, lastCompleted.s2PivotLow, s2Abbr, m.label, curr.startBar, 2, false)
-                        alert90minBullish := m.label == "90" and enable90minAlerts
-                        alert30minBullish := m.label == "30" and enable30minAlerts
+                        if not curr.alertedBullish
+                            if m.label == "90" and enable90minAlerts
+                                alert90minBullishSymbol := alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr
+                            else if m.label == "30" and enable30minAlerts
+                                alert30minBullishSymbol := alert30minBullishSymbol == "" ? s2Abbr : alert30minBullishSymbol + "+" + s2Abbr
+                            curr.alertedBullish := true
 
         
         cycleCompleted = shouldComplete(m.current, m.duration)
@@ -979,18 +1023,8 @@ if inSession()
         if cycleCompleted
             completeCycle(m)
         
-        // Process inter-cycle SMT
-        [bearish, bullish] = processSMT(m)
-        if bearish
-            if m.label == "90" and enable90minAlerts
-                alert90minBearish := true
-            if m.label == "30" and enable30minAlerts
-                alert30minBearish := true
-        if bullish
-            if m.label == "90" and enable90minAlerts
-                alert90minBullish := true
-            if m.label == "30" and enable30minAlerts
-                alert30minBullish := true
+        // Process inter-cycle SMT (visual only, alerts handled by intra-cycle detection)
+        processSMT(m)
         updateExistingLines(m)
     // Removed duplicate repositionAllLabels calls, waiting for final check
 
@@ -1037,19 +1071,21 @@ if array.get(stateFlags, 0)
 //                              ALERT CONDITIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-if alert90minBearish
-    alert("90-min Bearish SMT Detected", alert.freq_once_per_bar_close)
-    alert90minBearish := false
+if alert90minBearishSymbol != ""
+    alert("🔴 90-min Bearish SMT Detected (" + alert90minBearishSymbol + ")", alert.freq_once_per_bar_close)
 
-if alert90minBullish
-    alert("90-min Bullish SMT Detected", alert.freq_once_per_bar_close)
-    alert90minBullish := false
+if alert90minBullishSymbol != ""
+    alert("🟢 90-min Bullish SMT Detected (" + alert90minBullishSymbol + ")", alert.freq_once_per_bar_close)
 
-if alert30minBearish
-    alert("30-min Bearish SMT Detected", alert.freq_once_per_bar_close)
-    alert30minBearish := false
+if alert30minBearishSymbol != ""
+    alert("🔴 30-min Bearish SMT Detected (" + alert30minBearishSymbol + ")", alert.freq_once_per_bar_close)
 
-if alert30minBullish
-    alert("30-min Bullish SMT Detected", alert.freq_once_per_bar_close)
-    alert30minBullish := false
+if alert30minBullishSymbol != ""
+    alert("🟢 30-min Bullish SMT Detected (" + alert30minBullishSymbol + ")", alert.freq_once_per_bar_close)
+
+if alert90minInvalidatedSymbol != ""
+    alert("❌ 90-min SMT Invalidated (" + alert90minInvalidatedSymbol + ")", alert.freq_once_per_bar_close)
+
+if alert30minInvalidatedSymbol != ""
+    alert("❌ 30-min SMT Invalidated (" + alert30minInvalidatedSymbol + ")", alert.freq_once_per_bar_close)
 
