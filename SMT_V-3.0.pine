@@ -598,156 +598,172 @@ isInvalidated(meta, isS1, isHigh, bearish, inverse, currMain, currComp) =>
         else
             bearish ? currComp > meta.compPrice : currComp < meta.compPrice
 
-drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish, typeId, compPrice, cycleStartBar, bool reposition = true) =>
+
+// Helper function to calculate day ID from timestamp (lightweight)
+// Must be defined before drawSMT and processSMT since both use it
+getDayId(int t) =>
+    h = hour(t, "America/New_York")
+    y = year(t, "America/New_York")
+    m = month(t, "America/New_York")
+    d = dayofmonth(t, "America/New_York")
+    // Day changes at 18:00 - if we're at or past 18:00, we're in the next trading day
+    h >= 18 ? (y * 10000 + m * 100 + d + 1) : (y * 10000 + m * 100 + d)
+
+drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish, typeId, compPrice, cycleStartBar, int currentDay, bool reposition = true) =>
     if na(bar1) or na(bar2) or na(time1) or na(time2)
         false
     else
-        newLen = calcLen(bar1, price1, bar2, price2)
-        idxRemove = -1
-        shouldAdd = true
-        mergeIdx = -1
-        
-        lineColor = bearish ? bearishSmtColor : bullishSmtColor
-        textColor = bearish ? bearishSmtColor : bullishSmtColor
-        
-        if array.size(lines) > 0
-            for i = 0 to array.size(lines) - 1
-                m = array.get(lines, i)
-                // Check if this is EXACT SAME symbol, cycle, and direction
-                if m.isBearish == bearish and m.cycleLabel == cycleLabel and m.isForCurrentCycle and m.symbols == symbolStr
-                    // Update existing line for this specific symbol
-                    mergeIdx := i
-                    shouldAdd := false
-                    break
-        
-        isNew = false
-        if mergeIdx >= 0
-            // Update existing SMT line for this symbol
-            existing = array.get(lines, mergeIdx)
+        // ONLY draw SMTs from current trading day - check if time2 (end point) is from current day
+        smtDayId = getDayId(time2)
+        if smtDayId != currentDay
+            false  // Skip drawing this SMT - it's from a previous trading day
+        else
+            newLen = calcLen(bar1, price1, bar2, price2)
+            idxRemove = -1
+            shouldAdd = true
+            mergeIdx = -1
             
-            // Always redraw the line with new coordinates (intra-cycle may have different endpoints)
-            line.delete(existing.lineObj)
-            lineStyle = cycleLabel == "90" ? getLineStyle(lineStyle90min) : (cycleLabel == "30" ? getLineStyle(lineStyle30min) : (cycleLabel == "10" ? getLineStyle(lineStyle10min) : (cycleLabel == "3" ? getLineStyle(lineStyle3min) : line.style_solid)))
-            existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=lineStyle)
-            existing.length := newLen
-            existing.mainPrice := price1
-            existing.compPrice := compPrice
+            lineColor = bearish ? bearishSmtColor : bullishSmtColor
+            textColor = bearish ? bearishSmtColor : bullishSmtColor
             
-            // Symbol already matches, just update coordinates (no label change needed)
-            
-            // Always reposition all labels after update to ensure proper stacking
-            if reposition
-                array.set(stateFlags, 0, true)
-
-
-            
-            isNew := false
-        else if shouldAdd
-            // No need to remove old lines here based on length anymore.
-            // Just add the new one and let the FIFO limit handle cleanup.
-            
-            lineStyle = cycleLabel == "90" ? getLineStyle(lineStyle90min) : (cycleLabel == "30" ? getLineStyle(lineStyle30min) : (cycleLabel == "10" ? getLineStyle(lineStyle10min) : (cycleLabel == "3" ? getLineStyle(lineStyle3min) : line.style_solid)))
-            l = line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=lineStyle)
-            
-            // Use right side of line (end point) for label placement
-            endTime = time2
-            endPrice = price2
-            
-            // Calculate stack position based on cycle priority: 90 > 30 > 10 > 3 > sessions
-            stackPosition = 0
-            cycleOrder = cycleLabel == "90" ? 0 : (cycleLabel == "30" ? 1 : (cycleLabel == "10" ? 2 : (cycleLabel == "3" ? 3 : 4)))
-            
-            // Count ALL existing labels with same direction to determine stack position
             if array.size(lines) > 0
-                for j = 0 to array.size(lines) - 1
-                    checkMeta = array.get(lines, j)
-                    if checkMeta.isBearish == bearish
-                        existingOrder = checkMeta.cycleLabel == "90" ? 0 : (checkMeta.cycleLabel == "30" ? 1 : (checkMeta.cycleLabel == "10" ? 2 : (checkMeta.cycleLabel == "3" ? 3 : 4)))
-                        // If existing label has lower priority (higher order), it goes below
-                        if existingOrder > cycleOrder
-                            stackPosition += 1
-            
-            // Use fixed pip/point spacing
-            stackOffset = stackPosition * labelStackSpacing
-            
-            // For bearish: positive = above line. For bullish: negative = below line
-            totalOffset = bearish ? (labelBaseOffset + stackOffset) : -(labelBaseOffset + stackOffset)
-            
-            // Add "m" only for numeric cycle labels (90, 30, 10, 3), not for session labels (ASIA, LONDON, NY-AM, NY-PM)
-            isSessionLabel = cycleLabel == "ASIA" or cycleLabel == "LONDON" or cycleLabel == "NY-AM" or cycleLabel == "NY-PM"
-            
-            // Calculate 369 numerology for endpoint
-            num369 = get369(endTime)
-            suffix369 = num369 > 0 ? " (" + str.tostring(num369) + ")" : ""
-            
-            txt = isSessionLabel ? cycleLabel + " " + symbolStr + suffix369 : cycleLabel + "m " + symbolStr + suffix369
-            
-            // Create label at right side of line (end point) with vertical offset
-            lab = label.new(endTime, endPrice + totalOffset, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
-            
-            array.push(lines, LineMetadata.new(l, lab, bearish, newLen, typeId, price1, compPrice, symbolStr, cycleLabel, cycleStartBar, true))
-            
-            while array.size(lines) > maxTotalLines
-                // Find line with lowest priority to remove
-                idxToRemove = -1
-                lowestPriority = 999
-                
                 for i = 0 to array.size(lines) - 1
-                    checkLn = array.get(lines, i)
-                    
-                    // EXEMPT 369 SMTs from FIFO deletion
-                    if get369(line.get_x2(checkLn.lineObj)) > 0
-                        continue
-                        
-                    p = getPriority(checkLn.cycleLabel)
-                    
-                    // Strict less than ensures we keep the distinct oldest if priorities match (FIFO within priority)
-                    if p < lowestPriority
-                        lowestPriority := p
-                        idxToRemove := i
+                    m = array.get(lines, i)
+                    // Check if this is EXACT SAME symbol, cycle, and direction
+                    if m.isBearish == bearish and m.cycleLabel == cycleLabel and m.isForCurrentCycle and m.symbols == symbolStr
+                        // Update existing line for this specific symbol
+                        mergeIdx := i
+                        shouldAdd := false
+                        break
+            
+            isNew = false
+            if mergeIdx >= 0
+                // Update existing SMT line for this symbol
+                existing = array.get(lines, mergeIdx)
                 
-                if idxToRemove >= 0
-                    old = array.remove(lines, idxToRemove)
-                    line.delete(old.lineObj)
-                    label.delete(old.labelObj)
-                else
-                    // All remaining lines are 369 lines, stop deleting even if above limit
-                    break
+                // Always redraw the line with new coordinates (intra-cycle may have different endpoints)
+                line.delete(existing.lineObj)
+                lineStyle = cycleLabel == "90" ? getLineStyle(lineStyle90min) : (cycleLabel == "30" ? getLineStyle(lineStyle30min) : (cycleLabel == "10" ? getLineStyle(lineStyle10min) : (cycleLabel == "3" ? getLineStyle(lineStyle3min) : line.style_solid)))
+                existing.lineObj := line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=lineStyle)
+                existing.length := newLen
+                existing.mainPrice := price1
+                existing.compPrice := compPrice
+                
+                // Symbol already matches, just update coordinates (no label change needed)
+                
+                // Always reposition all labels after update to ensure proper stacking
+                if reposition
+                    array.set(stateFlags, 0, true)
 
-            
-            // Reposition all labels after adding new one
-            if reposition
-                array.set(stateFlags, 0, true)
+
+                
+                isNew := false
+            else if shouldAdd
+                // No need to remove old lines here based on length anymore.
+                // Just add the new one and let the FIFO limit handle cleanup.
+                
+                lineStyle = cycleLabel == "90" ? getLineStyle(lineStyle90min) : (cycleLabel == "30" ? getLineStyle(lineStyle30min) : (cycleLabel == "10" ? getLineStyle(lineStyle10min) : (cycleLabel == "3" ? getLineStyle(lineStyle3min) : line.style_solid)))
+                l = line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=lineStyle)
+                
+                // Use right side of line (end point) for label placement
+                endTime = time2
+                endPrice = price2
+                
+                // Calculate stack position based on cycle priority: 90 > 30 > 10 > 3 > sessions
+                stackPosition = 0
+                cycleOrder = cycleLabel == "90" ? 0 : (cycleLabel == "30" ? 1 : (cycleLabel == "10" ? 2 : (cycleLabel == "3" ? 3 : 4)))
+                
+                // Count ALL existing labels with same direction to determine stack position
+                if array.size(lines) > 0
+                    for j = 0 to array.size(lines) - 1
+                        checkMeta = array.get(lines, j)
+                        if checkMeta.isBearish == bearish
+                            existingOrder = checkMeta.cycleLabel == "90" ? 0 : (checkMeta.cycleLabel == "30" ? 1 : (checkMeta.cycleLabel == "10" ? 2 : (checkMeta.cycleLabel == "3" ? 3 : 4)))
+                            // If existing label has lower priority (higher order), it goes below
+                            if existingOrder > cycleOrder
+                                stackPosition += 1
+                
+                // Use fixed pip/point spacing
+                stackOffset = stackPosition * labelStackSpacing
+                
+                // For bearish: positive = above line. For bullish: negative = below line
+                totalOffset = bearish ? (labelBaseOffset + stackOffset) : -(labelBaseOffset + stackOffset)
+                
+                // Add "m" only for numeric cycle labels (90, 30, 10, 3), not for session labels (ASIA, LONDON, NY-AM, NY-PM)
+                isSessionLabel = cycleLabel == "ASIA" or cycleLabel == "LONDON" or cycleLabel == "NY-AM" or cycleLabel == "NY-PM"
+                
+                // Calculate 369 numerology for endpoint
+                num369 = get369(endTime)
+                suffix369 = num369 > 0 ? " (" + str.tostring(num369) + ")" : ""
+                
+                txt = isSessionLabel ? cycleLabel + " " + symbolStr + suffix369 : cycleLabel + "m " + symbolStr + suffix369
+                
+                // Create label at right side of line (end point) with vertical offset
+                lab = label.new(endTime, endPrice + totalOffset, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
+                
+                array.push(lines, LineMetadata.new(l, lab, bearish, newLen, typeId, price1, compPrice, symbolStr, cycleLabel, cycleStartBar, true))
+                
+                while array.size(lines) > maxTotalLines
+                    // Find line with lowest priority to remove
+                    idxToRemove = -1
+                    lowestPriority = 999
+                    
+                    for i = 0 to array.size(lines) - 1
+                        checkLn = array.get(lines, i)
+                        
+                        // EXEMPT 369 SMTs from FIFO deletion
+                        if get369(line.get_x2(checkLn.lineObj)) > 0
+                            continue
+                            
+                        p = getPriority(checkLn.cycleLabel)
+                        
+                        // Strict less than ensures we keep the distinct oldest if priorities match (FIFO within priority)
+                        if p < lowestPriority
+                            lowestPriority := p
+                            idxToRemove := i
+                    
+                    if idxToRemove >= 0
+                        old = array.remove(lines, idxToRemove)
+                        line.delete(old.lineObj)
+                        label.delete(old.labelObj)
+                    else
+                        // All remaining lines are 369 lines, stop deleting even if above limit
+                        break
+
+                
+                // Reposition all labels after adding new one
+                if reposition
+                    array.set(stateFlags, 0, true)
 
 
-            
-            isNew := true
-        isNew
+                
+                isNew := true
+            isNew
 
 // Unified SMT Detection Helper
-checkAndDrawSMT(PivotPoint currMain, PivotPoint prevMain, PivotPoint currComp, PivotPoint prevComp, string symStr, string lbl, int startBar, int typeBase, bool isBearish) =>
+checkAndDrawSMT(PivotPoint currMain, PivotPoint prevMain, PivotPoint currComp, PivotPoint prevComp, string symStr, string lbl, int startBar, int typeBase, bool isBearish, int currentDay) =>
     detected = false
     if not na(currMain.price) and not na(prevMain.price) and not na(currComp.price) and not na(prevComp.price)
         if isBearish
             // Bearish Normal: Main Higher High, Comp Lower High
             if currMain.price > prevMain.price and currComp.price < prevComp.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 0, currComp.price, startBar, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 0, currComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
             // Bearish Inverse: Comp Higher High, Main Lower High
             if currComp.price > prevComp.price and currMain.price < prevMain.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 4, currComp.price, startBar, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 4, currComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
         else
             // Bullish Normal: Main Lower Low, Comp Higher Low
             if currMain.price < prevMain.price and currComp.price > prevComp.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 1, currComp.price, startBar, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 1, currComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
             // Bullish Inverse: Comp Lower Low, Main Higher Low
             if currComp.price < prevComp.price and currMain.price > prevMain.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 5, currComp.price, startBar, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 5, currComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
     detected
@@ -815,7 +831,9 @@ updateExistingLines(m) =>
                         // Trigger reposition to update label text (369 calculation) and position immediately
                         array.set(stateFlags, 0, true)
 
-processSMT(m) =>
+
+
+processSMT(m, int currentDay) =>
     // Process SMT when we have at least one completed cycle in history
     // Returns [bearishDetected, bullishDetected] for alert tracking
     
@@ -831,10 +849,10 @@ processSMT(m) =>
         
         // INTRA-CYCLE DETECTION removed from here - now done in main execution loop before updateCyclePivots
         
-        // INTER-CYCLE DETECTION (compare against completed cycles)
+        // INTER-CYCLE DETECTION (compare against completed cycles from current day only)
         hasHistory = array.size(m.history) > 0
         if hasHistory
-            // Compare current cycle against previous completed cycles
+            // Compare current cycle against previous completed cycles FROM CURRENT DAY ONLY
             // 3-min cycle: only compare last 1 cycle (most recent)
             // 10-min cycle: only compare last 2 cycles
             // Other cycles: compare all cycles (up to 10)
@@ -843,6 +861,15 @@ processSMT(m) =>
             
             for prevIdx = startIdx to array.size(m.history) - 1
                 prev = array.get(m.history, prevIdx)
+                
+                // ONLY compare cycles from the current trading day (from 18:00 onwards)
+                // Calculate day ID for previous cycle using helper function
+                if not na(prev.startTime)
+                    prevDayId = getDayId(prev.startTime)
+                    
+                    // Skip if previous cycle is from a different trading day
+                    if prevDayId != currentDay
+                        continue
                 
                 // Pre-fetch all pivots once (renamed to avoid shadowing session globals)
                 currMainHigh = curr.mainPivotHigh
@@ -860,16 +887,16 @@ processSMT(m) =>
                 
                 // Check Symbol 1 SMTs (only if enabled)
                 if enableSymbol1
-                    if checkAndDrawSMT(currMainHigh, cycPrevMainHigh, currS1High, cycPrevS1High, s1Abbr, m.label, curr.startBar, 0, true)
+                    if checkAndDrawSMT(currMainHigh, cycPrevMainHigh, currS1High, cycPrevS1High, s1Abbr, m.label, curr.startBar, 0, true, currentDay)
                         bearishSmtDetected := true
-                    if checkAndDrawSMT(currMainLow, cycPrevMainLow, currS1Low, cycPrevS1Low, s1Abbr, m.label, curr.startBar, 0, false)
+                    if checkAndDrawSMT(currMainLow, cycPrevMainLow, currS1Low, cycPrevS1Low, s1Abbr, m.label, curr.startBar, 0, false, currentDay)
                         bullishSmtDetected := true
                 
                 // Check Symbol 2 SMTs (only if enabled)
                 if enableSymbol2
-                    if checkAndDrawSMT(currMainHigh, cycPrevMainHigh, currS2High, cycPrevS2High, s2Abbr, m.label, curr.startBar, 2, true)
+                    if checkAndDrawSMT(currMainHigh, cycPrevMainHigh, currS2High, cycPrevS2High, s2Abbr, m.label, curr.startBar, 2, true, currentDay)
                         bearishSmtDetected := true
-                    if checkAndDrawSMT(currMainLow, cycPrevMainLow, currS2Low, cycPrevS2Low, s2Abbr, m.label, curr.startBar, 2, false)
+                    if checkAndDrawSMT(currMainLow, cycPrevMainLow, currS2Low, cycPrevS2Low, s2Abbr, m.label, curr.startBar, 2, false, currentDay)
                         bullishSmtDetected := true
 
             
@@ -899,23 +926,23 @@ startDailySession(s) =>
 // Obsolete updateDailySessionPivots removed - use updatePivots(sess.data) instead
 
 
-compareSessionSMT(curr, prev) =>
+compareSessionSMT(curr, prev, int currentDay) =>
     // Note: Sessions use prev.startTime as the identifier (not startBar since sessions don't have startBar)
     sessionStartBar = bar_index  // Use current bar as the session start reference
     
     // Compare current session high to previous session high (Bearish)
     if not na(curr.data.mainPivotHigh.price) and not na(prev.data.mainPivotHigh.price)
         if enableSymbol1
-            checkAndDrawSMT(curr.data.mainPivotHigh, prev.data.mainPivotHigh, curr.data.s1PivotHigh, prev.data.s1PivotHigh, s1Abbr, prev.name, sessionStartBar, 0, true)
+            checkAndDrawSMT(curr.data.mainPivotHigh, prev.data.mainPivotHigh, curr.data.s1PivotHigh, prev.data.s1PivotHigh, s1Abbr, prev.name, sessionStartBar, 0, true, currentDay)
         if enableSymbol2
-            checkAndDrawSMT(curr.data.mainPivotHigh, prev.data.mainPivotHigh, curr.data.s2PivotHigh, prev.data.s2PivotHigh, s2Abbr, prev.name, sessionStartBar, 2, true)
+            checkAndDrawSMT(curr.data.mainPivotHigh, prev.data.mainPivotHigh, curr.data.s2PivotHigh, prev.data.s2PivotHigh, s2Abbr, prev.name, sessionStartBar, 2, true, currentDay)
     
     // Compare current session low to previous session low (Bullish)
     if not na(curr.data.mainPivotLow.price) and not na(prev.data.mainPivotLow.price)
         if enableSymbol1
-            checkAndDrawSMT(curr.data.mainPivotLow, prev.data.mainPivotLow, curr.data.s1PivotLow, prev.data.s1PivotLow, s1Abbr, prev.name, sessionStartBar, 0, false)
+            checkAndDrawSMT(curr.data.mainPivotLow, prev.data.mainPivotLow, curr.data.s1PivotLow, prev.data.s1PivotLow, s1Abbr, prev.name, sessionStartBar, 0, false, currentDay)
         if enableSymbol2
-            checkAndDrawSMT(curr.data.mainPivotLow, prev.data.mainPivotLow, curr.data.s2PivotLow, prev.data.s2PivotLow, s2Abbr, prev.name, sessionStartBar, 2, false)
+            checkAndDrawSMT(curr.data.mainPivotLow, prev.data.mainPivotLow, curr.data.s2PivotLow, prev.data.s2PivotLow, s2Abbr, prev.name, sessionStartBar, 2, false, currentDay)
 
 
 
@@ -928,12 +955,18 @@ compareSessionSMT(curr, prev) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 //  EXECUTION FLOW:
-//      1. Track daily reset - Clear all SMTs at day change
+//      1. Track daily reset - Clear all SMTs at 18:00 NY time (Asia session open)
 //      2. Check invalidation - Remove SMTs broken by new price action
 //      3. Session filter - Only process during active trading session
 //      4. Cycle management - Start, update, or complete cycles
-//      5. SMT detection - Compare current vs previous cycles
+//      5. SMT detection - Compare current vs previous cycles (current day only)
 //      6. Real-time updates - Move line endpoints as extremes change
+//
+//  TRADING DAY:
+//      • Trading day starts at 18:00 NY time (Asia session open)
+//      • All SMT history is cleared at 18:00 each day
+//      • Only cycles from current trading day (18:00 onwards) are compared
+//      • This aligns with futures market day boundaries
 //
 //  SMT DETECTION LOGIC:
 //      Bearish SMT (Normal): Main makes higher high, Comparison makes lower high
@@ -952,60 +985,39 @@ compareSessionSMT(curr, prev) =>
 
 
 // Track day changes - Use 18:00 as day boundary (futures true day open)
-// Create unique day ID: YYYYMMDD format
+// Use built-in calendar variables (already in exchange timezone) for current bar
+// Then convert to NY time for 18:00 boundary check
 nyHour = hour(time, "America/New_York")
 nyYear = year(time, "America/New_York")
 nyMonth = month(time, "America/New_York")
 nyDay = dayofmonth(time, "America/New_York")
+// Day changes at 18:00 - if we're at or past 18:00, we're in the next trading day
 currentDay = nyHour >= 18 ? (nyYear * 10000 + nyMonth * 100 + nyDay + 1) : (nyYear * 10000 + nyMonth * 100 + nyDay)
 
 
 
-// Daily reset logic - reset ALL cycles at midnight
+// Daily reset logic - reset ALL cycles at 18:00 NY time (Asia session open)
 if currentDay != lastDay and not na(lastDay)
+    // 1. Reset all Cycle Managers (history and active state)
     for i = 0 to array.size(managers) - 1
         m = array.get(managers, i)
-        
-        // Daily reset for ALL cycles (90min, 30min, 10min, 3min)
         array.clear(m.history)
         m.current.active := false
-        // Clear lines for these cycles (except 369 SMTs)
-        if array.size(lines) > 0
-            toRemove = array.new<int>()
-            for j = 0 to array.size(lines) - 1
-                meta = array.get(lines, j)
-                // Only remove if it's this cycle AND not a 369 SMT
-                if meta.cycleLabel == m.label and get369(line.get_x2(meta.lineObj)) == 0
-                    array.push(toRemove, j)
-            if array.size(toRemove) > 0
-                for j = array.size(toRemove) - 1 to 0
-                    old = array.remove(lines, array.get(toRemove, j))
-                    line.delete(old.lineObj)
-                    label.delete(old.labelObj)
     
-    // Reset all daily sessions (except active ones spanning midnight)
+    // 2. Reset all Daily Sessions
     for i = 0 to array.size(dailySessions) - 1
         sess = array.get(dailySessions, i)
-        // Don't reset if session is currently active (likely spanning midnight)
-        // Don't reset if session is currently active (likely spanning midnight)
-        if not sess.data.active
-            // No need to manually reset pivots, startCycle() does this when session starts
-            sess.data.active := false
+        // Reset all sessions at new day boundary (18:00)
+        sess.data.active := false
 
-    
-    // Clear session lines daily
+    // 3. NUCLEAR LINE WIPE: Delete ALL lines and labels from the previous day/history
+    // This ensures NO SMTs (including 369s) persist across the 18:00 boundary
     if array.size(lines) > 0
-        toRemove = array.new<int>()
         for j = 0 to array.size(lines) - 1
-            meta = array.get(lines, j)
-            isSessionLabel = meta.cycleLabel == "ASIA" or meta.cycleLabel == "LONDON" or meta.cycleLabel == "NY-AM" or meta.cycleLabel == "NY-PM"
-            if isSessionLabel
-                array.push(toRemove, j)
-        if array.size(toRemove) > 0
-            for j = array.size(toRemove) - 1 to 0
-                old = array.remove(lines, array.get(toRemove, j))
-                line.delete(old.lineObj)
-                label.delete(old.labelObj)
+            l = array.get(lines, j)
+            line.delete(l.lineObj)
+            label.delete(l.labelObj)
+        array.clear(lines)
 
 lastDay := currentDay
 
@@ -1071,7 +1083,7 @@ if inSession()
             
             if anyHighChanged
                 if enableSymbol1
-                    if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s1PivotHigh, lastCompleted.s1PivotHigh, s1Abbr, m.label, curr.startBar, 0, true)
+                    if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s1PivotHigh, lastCompleted.s1PivotHigh, s1Abbr, m.label, curr.startBar, 0, true, currentDay)
                         if not curr.alertedBearish
                             if m.label == "90" and enable90minAlerts
                                 alert90minBearishSymbol := s1Abbr
@@ -1079,7 +1091,7 @@ if inSession()
                                 alert30minBearishSymbol := s1Abbr
                             curr.alertedBearish := true
                 if enableSymbol2
-                    if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s2PivotHigh, lastCompleted.s2PivotHigh, s2Abbr, m.label, curr.startBar, 2, true)
+                    if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s2PivotHigh, lastCompleted.s2PivotHigh, s2Abbr, m.label, curr.startBar, 2, true, currentDay)
                         if not curr.alertedBearish
                             if m.label == "90" and enable90minAlerts
                                 alert90minBearishSymbol := alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr
@@ -1089,7 +1101,7 @@ if inSession()
             
             if anyLowChanged
                 if enableSymbol1
-                    if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s1PivotLow, lastCompleted.s1PivotLow, s1Abbr, m.label, curr.startBar, 0, false)
+                    if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s1PivotLow, lastCompleted.s1PivotLow, s1Abbr, m.label, curr.startBar, 0, false, currentDay)
                         if not curr.alertedBullish
                             if m.label == "90" and enable90minAlerts
                                 alert90minBullishSymbol := s1Abbr
@@ -1097,7 +1109,7 @@ if inSession()
                                 alert30minBullishSymbol := s1Abbr
                             curr.alertedBullish := true
                 if enableSymbol2
-                    if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s2PivotLow, lastCompleted.s2PivotLow, s2Abbr, m.label, curr.startBar, 2, false)
+                    if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s2PivotLow, lastCompleted.s2PivotLow, s2Abbr, m.label, curr.startBar, 2, false, currentDay)
                         if not curr.alertedBullish
                             if m.label == "90" and enable90minAlerts
                                 alert90minBullishSymbol := alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr
@@ -1106,7 +1118,7 @@ if inSession()
                             curr.alertedBullish := true
 
         // 7. INTER-CYCLE & VISUAL UPDATES
-        processSMT(m)
+        processSMT(m, currentDay)
         updateExistingLines(m)
     // Removed duplicate repositionAllLabels calls, waiting for final check
 
@@ -1138,7 +1150,7 @@ if enableSessionSMT
             for j = 0 to i - 1
                 prevSess = array.get(dailySessions, j)
                 if prevSess.enabled and not na(prevSess.data.mainPivotHigh.price) and not na(prevSess.data.mainPivotLow.price)
-                    compareSessionSMT(sess, prevSess)
+                    compareSessionSMT(sess, prevSess, currentDay)
             array.set(stateFlags, 0, true)
 
 
