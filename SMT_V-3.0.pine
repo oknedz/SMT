@@ -281,6 +281,36 @@ getAbbr(sym) =>
 getLineStyle(styleStr) =>
     styleStr == "Dashed" ? line.style_dashed : (styleStr == "Dotted" ? line.style_dotted : line.style_solid)
 
+// Helper to sum digits and reduce to digital root
+reduceDigits(n) =>
+    val = n
+    if val > 9
+        val := math.floor(val / 10) + (val % 10)
+    if val > 9
+        val := math.floor(val / 10) + (val % 10)
+    val
+
+// Calculate 369 numerology from timestamp
+// Priority: 1. Minutes only sum, 2. Hour+Minutes sum
+// Returns 3, 6, or 9 if applicable, otherwise returns 0
+get369(timestamp) =>
+    h = hour(timestamp, sessionTimezone)
+    m = minute(timestamp, sessionTimezone)
+    
+    // 1. Full Time Sum (HH + MM digits)
+    sumHHMM = reduceDigits(math.floor(h / 10) + (h % 10) + math.floor(m / 10) + (m % 10))
+    
+    // 2. Minutes Only Sum
+    sumMM = reduceDigits(m)
+    
+    // Result logic: prioritize Minutes Only (:MM) result
+    res = 0
+    if sumMM == 3 or sumMM == 6 or sumMM == 9
+        res := sumMM
+    else if sumHHMM == 3 or sumHHMM == 6 or sumHHMM == 9
+        res := sumHHMM
+    res
+
 // Cache monthly contract check to avoid repeated string parsing
 var bool isMonthlyContract = str.contains(syminfo.ticker, "Z") or str.contains(syminfo.ticker, "H") or str.contains(syminfo.ticker, "M") or str.contains(syminfo.ticker, "U")
 
@@ -482,8 +512,13 @@ repositionAllLabels() =>
                         else
                             // Build combined text for first label
                             isSessionLabel = meta.cycleLabel == "ASIA" or meta.cycleLabel == "LONDON" or meta.cycleLabel == "NY-AM" or meta.cycleLabel == "NY-PM"
+                            
+                            // Calculate 369 for this endpoint
+                            num369 = get369(x2)
+                            suffix369 = num369 > 0 ? " (" + str.tostring(num369) + ")" : ""
+                            
                             if combinedText == ""
-                                combinedText := isSessionLabel ? meta.cycleLabel + " " + meta.symbols : meta.cycleLabel + "m " + meta.symbols
+                                combinedText := isSessionLabel ? meta.cycleLabel + " " + meta.symbols + suffix369 : meta.cycleLabel + "m " + meta.symbols + suffix369
                             else
                                 // Add to combined text
                                 suffix = isSessionLabel ? checkMeta.cycleLabel + " " + checkMeta.symbols : checkMeta.cycleLabel + "m " + checkMeta.symbols
@@ -640,7 +675,12 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             
             // Add "m" only for numeric cycle labels (90, 30, 10, 3), not for session labels (ASIA, LONDON, NY-AM, NY-PM)
             isSessionLabel = cycleLabel == "ASIA" or cycleLabel == "LONDON" or cycleLabel == "NY-AM" or cycleLabel == "NY-PM"
-            txt = isSessionLabel ? cycleLabel + " " + symbolStr : cycleLabel + "m " + symbolStr
+            
+            // Calculate 369 numerology for endpoint
+            num369 = get369(endTime)
+            suffix369 = num369 > 0 ? " (" + str.tostring(num369) + ")" : ""
+            
+            txt = isSessionLabel ? cycleLabel + " " + symbolStr + suffix369 : cycleLabel + "m " + symbolStr + suffix369
             
             // Create label at right side of line (end point) with vertical offset
             lab = label.new(endTime, endPrice + totalOffset, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
@@ -649,11 +689,16 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
             
             while array.size(lines) > maxTotalLines
                 // Find line with lowest priority to remove
-                idxToRemove = 0
+                idxToRemove = -1
                 lowestPriority = 999
                 
                 for i = 0 to array.size(lines) - 1
                     checkLn = array.get(lines, i)
+                    
+                    // EXEMPT 369 SMTs from FIFO deletion
+                    if get369(line.get_x2(checkLn.lineObj)) > 0
+                        continue
+                        
                     p = getPriority(checkLn.cycleLabel)
                     
                     // Strict less than ensures we keep the distinct oldest if priorities match (FIFO within priority)
@@ -661,9 +706,13 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
                         lowestPriority := p
                         idxToRemove := i
                 
-                old = array.remove(lines, idxToRemove)
-                line.delete(old.lineObj)
-                label.delete(old.labelObj)
+                if idxToRemove >= 0
+                    old = array.remove(lines, idxToRemove)
+                    line.delete(old.lineObj)
+                    label.delete(old.labelObj)
+                else
+                    // All remaining lines are 369 lines, stop deleting even if above limit
+                    break
 
             
             // Reposition all labels after adding new one
@@ -761,7 +810,10 @@ updateExistingLines(m) =>
                 
                 if not na(currPivot.price)
                     // Update the line endpoint to current cycle's extreme
-                    line.set_xy2(meta.lineObj, currPivot.time, currPivot.price)
+                    if line.get_x2(meta.lineObj) != currPivot.time or line.get_y2(meta.lineObj) != currPivot.price
+                        line.set_xy2(meta.lineObj, currPivot.time, currPivot.price)
+                        // Trigger reposition to update label text (369 calculation) and position immediately
+                        array.set(stateFlags, 0, true)
 
 processSMT(m) =>
     // Process SMT when we have at least one completed cycle in history
@@ -822,7 +874,7 @@ processSMT(m) =>
 
             
             // Cleanup old cycles (keep more history for comparison)
-            while array.size(m.history) > 10
+            while array.size(m.history) > 100
                 array.remove(m.history, 0)
             
             array.set(stateFlags, 0, true)
@@ -900,7 +952,12 @@ compareSessionSMT(curr, prev) =>
 
 
 // Track day changes - Use 18:00 as day boundary (futures true day open)
-currentDay = hour(time) >= 18 ? dayofmonth(time) : dayofmonth(time) - 1
+// Create unique day ID: YYYYMMDD format
+nyHour = hour(time, "America/New_York")
+nyYear = year(time, "America/New_York")
+nyMonth = month(time, "America/New_York")
+nyDay = dayofmonth(time, "America/New_York")
+currentDay = nyHour >= 18 ? (nyYear * 10000 + nyMonth * 100 + nyDay + 1) : (nyYear * 10000 + nyMonth * 100 + nyDay)
 
 
 
@@ -912,12 +969,13 @@ if currentDay != lastDay and not na(lastDay)
         // Daily reset for ALL cycles (90min, 30min, 10min, 3min)
         array.clear(m.history)
         m.current.active := false
-        // Clear lines for these cycles
+        // Clear lines for these cycles (except 369 SMTs)
         if array.size(lines) > 0
             toRemove = array.new<int>()
             for j = 0 to array.size(lines) - 1
                 meta = array.get(lines, j)
-                if meta.cycleLabel == m.label
+                // Only remove if it's this cycle AND not a 369 SMT
+                if meta.cycleLabel == m.label and get369(line.get_x2(meta.lineObj)) == 0
                     array.push(toRemove, j)
             if array.size(toRemove) > 0
                 for j = array.size(toRemove) - 1 to 0
@@ -974,53 +1032,43 @@ if inSession()
             startCycle(m.current)
         
         // Save previous state BEFORE updating
+        // 1. CYCLE LIFECYCLE CHECK
+        // Check if cycle should complete BEFORE processing any data for the current bar
+        cycleCompleted = shouldComplete(m.current, m.duration)
+        if cycleCompleted
+            completeCycle(m)
+        
+        // Ensure cycle is active
+        if not m.current.active and inSession()
+            startCycle(m.current)
+
+        // 2. DATA SNAPSHOT (FOR CHANGE TRACKING)
         prevMainHigh = m.current.mainPivotHigh.price
         prevMainLow = m.current.mainPivotLow.price
         prevS1High = m.current.s1PivotHigh.price
         prevS1Low = m.current.s1PivotLow.price
         prevS2High = m.current.s2PivotHigh.price
         prevS2Low = m.current.s2PivotLow.price
-        prevMainHighBar = m.current.mainPivotHigh.barIndex
-        prevMainLowBar = m.current.mainPivotLow.barIndex
-        prevMainHighTime = m.current.mainPivotHigh.time
-        prevMainLowTime = m.current.mainPivotLow.time
-        prevS1HighBar = m.current.s1PivotHigh.barIndex
-        prevS1LowBar = m.current.s1PivotLow.barIndex
-        prevS2HighBar = m.current.s2PivotHigh.barIndex
-        prevS2LowBar = m.current.s2PivotLow.barIndex
-        prevS1HighTime = m.current.s1PivotHigh.time
-        prevS1LowTime = m.current.s1PivotLow.time
-        prevS2HighTime = m.current.s2PivotHigh.time
-        prevS2LowTime = m.current.s2PivotLow.time
         
+        // 3. UPDATE CURRENT EXTREMES
         updatePivots(m.current)
-
         
-        // Check invalidation after updating pivots (removes lines if divergence disappears)
+        // 4. INVALIDATION CHECK
         [inv90_2, inv30_2] = checkInvalidation()
         if inv90_2 != ""
             alert90minInvalidatedSymbol := inv90_2
         if inv30_2 != ""
             alert30minInvalidatedSymbol := inv30_2
         
-        // Check for pivot changes to optimize detection
-        bool mainHighChanged = m.current.mainPivotHigh.price != prevMainHigh
-        bool mainLowChanged = m.current.mainPivotLow.price != prevMainLow
-        bool s1HighChanged = m.current.s1PivotHigh.price != prevS1High
-        bool s1LowChanged = m.current.s1PivotLow.price != prevS1Low
-        bool s2HighChanged = m.current.s2PivotHigh.price != prevS2High
-        bool s2LowChanged = m.current.s2PivotLow.price != prevS2Low
-        
-        bool anyHighChanged = mainHighChanged or s1HighChanged or s2HighChanged
-        bool anyLowChanged = mainLowChanged or s1LowChanged or s2LowChanged
+        // 5. CHANGE DETECTION
+        bool anyHighChanged = m.current.mainPivotHigh.price != prevMainHigh or m.current.s1PivotHigh.price != prevS1High or m.current.s2PivotHigh.price != prevS2High
+        bool anyLowChanged = m.current.mainPivotLow.price != prevMainLow or m.current.s1PivotLow.price != prevS1Low or m.current.s2PivotLow.price != prevS2Low
 
-        // Detect intra-cycle SMT: Compare current ACTIVE cycle vs last COMPLETED cycle
-        // This gives real-time updates as current cycle develops
-        if array.size(m.history) > 0
+        // 6. INTRA-CYCLE DETECTION
+        if array.size(m.history) > 0 and m.current.active
             curr = m.current
             lastCompleted = array.get(m.history, array.size(m.history) - 1)
             
-            // Only run bearish checks if highs changed
             if anyHighChanged
                 if enableSymbol1
                     if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s1PivotHigh, lastCompleted.s1PivotHigh, s1Abbr, m.label, curr.startBar, 0, true)
@@ -1039,7 +1087,6 @@ if inSession()
                                 alert30minBearishSymbol := alert30minBearishSymbol == "" ? s2Abbr : alert30minBearishSymbol + "+" + s2Abbr
                             curr.alertedBearish := true
             
-            // Only run bullish checks if lows changed
             if anyLowChanged
                 if enableSymbol1
                     if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s1PivotLow, lastCompleted.s1PivotLow, s1Abbr, m.label, curr.startBar, 0, false)
@@ -1058,13 +1105,7 @@ if inSession()
                                 alert30minBullishSymbol := alert30minBullishSymbol == "" ? s2Abbr : alert30minBullishSymbol + "+" + s2Abbr
                             curr.alertedBullish := true
 
-        
-        cycleCompleted = shouldComplete(m.current, m.duration)
-        
-        if cycleCompleted
-            completeCycle(m)
-        
-        // Process inter-cycle SMT (visual only, alerts handled by intra-cycle detection)
+        // 7. INTER-CYCLE & VISUAL UPDATES
         processSMT(m)
         updateExistingLines(m)
     // Removed duplicate repositionAllLabels calls, waiting for final check
