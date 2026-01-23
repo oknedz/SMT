@@ -500,6 +500,7 @@ repositionAllLabels() =>
             if not alreadyProcessed
                 // Find all lines ending at same bar with same direction
                 combinedText = ""
+                string firstCycleLabel = ""
                 cycleOrder = meta.cycleLabel == "90" ? 0 : (meta.cycleLabel == "30" ? 1 : (meta.cycleLabel == "10" ? 2 : (meta.cycleLabel == "3" ? 3 : 4)))
                 
                 for j = 0 to array.size(lines) - 1
@@ -521,10 +522,16 @@ repositionAllLabels() =>
                             
                             if combinedText == ""
                                 combinedText := isSessionLabel ? meta.cycleLabel + " " + meta.symbols + suffix369 : meta.cycleLabel + "m " + meta.symbols + suffix369
+                                firstCycleLabel := meta.cycleLabel
                             else
-                                // Add to combined text
-                                suffix = isSessionLabel ? checkMeta.cycleLabel + " " + checkMeta.symbols : checkMeta.cycleLabel + "m " + checkMeta.symbols
-                                combinedText := combinedText + " + " + suffix
+                                // Check if cycle label is the same as the first one
+                                if checkMeta.cycleLabel == firstCycleLabel
+                                    // Just add the symbol, skip the cycle label part
+                                    combinedText := combinedText + " + " + checkMeta.symbols
+                                else
+                                    // Different cycle, add full text
+                                    suffix = isSessionLabel ? checkMeta.cycleLabel + " " + checkMeta.symbols : checkMeta.cycleLabel + "m " + checkMeta.symbols
+                                    combinedText := combinedText + " + " + suffix
                 
                 // Set combined text on first label
                 if combinedText != ""
