@@ -1,0 +1,1453 @@
+//@version=6
+indicator("Quarter [StoneFace]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Visual Elements
+grp_vis = "Visual Elements"
+show_dsep = input.bool(true, "Day Separators", group=grp_vis)
+c_dsep    = input.color(color.new(color.gray, 50), "Separator Color", group=grp_vis, inline="sep")
+show_wd   = input.bool(true, "Day Labels", group=grp_vis)
+c_text    = input.color(color.gray, "Label Color", group=grp_vis, inline="lbl")
+
+// Quarters - Unified Settings
+grp_q = "QUARTERS"
+c_q1      = input.color(color.gray, "Q1", group=grp_q, inline="colors")
+c_q2      = input.color(color.red, "Q2", group=grp_q, inline="colors")
+c_q3      = input.color(color.green, "Q3", group=grp_q, inline="colors")
+c_q4      = input.color(color.blue, "Q4", group=grp_q, inline="colors")
+opacity   = input.int(80, "Opacity", minval=0, maxval=100, group=grp_q)
+show_mthq = input.bool(true, "Monthly Quarters", group=grp_q)
+show_wq   = input.bool(true, "Weekly Quarters", group=grp_q)
+show_dq   = input.bool(true, "Daily Quarters", group=grp_q)
+show_sq   = input.bool(true, "Session Quarters", group=grp_q)
+show_mq   = input.bool(true, "Micro Quarters", group=grp_q)
+show_friday = input.bool(true, "Show Friday", group=grp_q, tooltip="Show Daily/Session/Micro quarters on Friday")
+
+// Opening Prices
+// Opening Prices
+grp_open = "Opening Prices"
+// Get line style from string input
+get_lst(style_str) =>
+    switch style_str
+        "Solid" => line.style_solid
+        "Dotted" => line.style_dotted
+        "Dashed" => line.style_dashed
+        => line.style_solid
+
+show_tmo = input.bool(true, "TMO", group=grp_open, inline="tmo")
+c_tmo    = input.color(color.black, "", group=grp_open, inline="tmo")
+s_tmo    = input.string("Solid", "", options=["Solid", "Dotted", "Dashed"], group=grp_open, inline="tmo")
+w_tmo    = input.int(1, "", minval=1, maxval=4, group=grp_open, inline="tmo")
+
+show_two = input.bool(true, "TWO", group=grp_open, inline="two")
+c_two    = input.color(color.black, "", group=grp_open, inline="two")
+s_two    = input.string("Solid", "", options=["Solid", "Dotted", "Dashed"], group=grp_open, inline="two")
+w_two    = input.int(1, "", minval=1, maxval=4, group=grp_open, inline="two")
+
+show_tdo = input.bool(true, "TDO", group=grp_open, inline="tdo")
+c_tdo    = input.color(color.black, "", group=grp_open, inline="tdo")
+s_tdo    = input.string("Solid", "", options=["Solid", "Dotted", "Dashed"], group=grp_open, inline="tdo")
+w_tdo    = input.int(1, "", minval=1, maxval=4, group=grp_open, inline="tdo")
+
+show_tso = input.bool(true, "TSO", group=grp_open, inline="tso")
+show_tso_lbl = input.bool(true, "", tooltip="Show TSO Labels", group=grp_open, inline="tso")
+c_tso    = input.color(color.black, "", group=grp_open, inline="tso")
+s_tso    = input.string("Solid", "", options=["Solid", "Dotted", "Dashed"], group=grp_open, inline="tso")
+w_tso    = input.int(1, "", minval=1, maxval=4, group=grp_open, inline="tso")
+
+show_tmso = input.bool(true, "TMSO", group=grp_open, inline="tmso")
+c_tmso    = input.color(color.black, "", group=grp_open, inline="tmso")
+s_tmso    = input.string("Solid", "", options=["Solid", "Dotted", "Dashed"], group=grp_open, inline="tmso")
+w_tmso    = input.int(1, "", minval=1, maxval=4, group=grp_open, inline="tmso")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+grp_smt = "SMT Detection"
+show_smt_mth = input.bool(true, "Monthly SMT", group=grp_smt, inline="smt_mth")
+show_smt_wk  = input.bool(true, "Weekly SMT", group=grp_smt, inline="smt_wk")
+show_smt_day = input.bool(true, "Daily SMT", group=grp_smt, inline="smt_day")
+show_smt_sess = input.bool(true, "Session SMT", group=grp_smt, inline="smt_sess")
+show_smt_micro = input.bool(true, "Micro SMT", group=grp_smt, inline="smt_micro")
+
+c_smt_bull = input.color(color.new(color.green, 0), "Bullish SMT", group=grp_smt)
+c_smt_bear = input.color(color.new(color.red, 0), "Bearish SMT", group=grp_smt)
+smt_width = input.int(1, "Line Width", minval=1, maxval=4, group=grp_smt)
+smt_style = input.string("Solid", "Line Style", options=["Solid", "Dotted", "Dashed"], group=grp_smt)
+
+
+// Visibility Logic
+sec = timeframe.in_seconds(timeframe.period)
+vis_smt_mth   = show_smt_mth   and sec <= 604800 // Weekly
+vis_smt_wk    = show_smt_wk    and sec <= 259200 // 3 Days
+vis_smt_day   = show_smt_day   and sec <= 14400  // 4 Hours
+vis_smt_sess  = show_smt_sess  and sec <= 3600   // 1 Hour
+vis_smt_micro = show_smt_micro and sec <= 1800   // 30 Min
+
+// Comparison Symbols
+grp_sym = "Comparison Symbols"
+symbol1 = input.symbol("MES1!", "Symbol 1", group="SMT Settings")
+symbol2 = input.symbol("MYM1!", "Symbol 2", group="SMT Settings")
+
+// 369 Logic
+use_369 = input.bool(true, "Use 369 Logic", group=grp_smt, tooltip="Enable 369 numerology for SMT validation")
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Limit Visible SMTs
+max_smts = input.int(10, "Max Visible SMTs", group="SMT Settings", minval=1, tooltip="Limit the number of historical SMT lines shown")
+
+var line[]  a_smt_lines  = array.new_line()
+var label[] a_smt_labels = array.new_label()
+
+// Helper to manage history
+add_smt_history(line l, label lb) =>
+    if not na(l)
+        array.push(a_smt_lines, l)
+        array.push(a_smt_labels, lb)
+        if array.size(a_smt_lines) > max_smts
+            line.delete(array.shift(a_smt_lines))
+            label.delete(array.shift(a_smt_labels))
+
+// Helper for strict abbreviation
+getAbbr(sym) =>
+    ret = "XX"
+    if str.contains(sym, "ES") or str.contains(sym, "SPX") or str.contains(sym, "US500") or str.contains(sym, "MES")
+        ret := "ES"
+    else if str.contains(sym, "YM") or str.contains(sym, "US30") or str.contains(sym, "DJI") or str.contains(sym, "MYM")
+        ret := "YM"
+    else if str.contains(sym, "NQ") or str.contains(sym, "US100") or str.contains(sym, "NDX") or str.contains(sym, "MNQ")
+        ret := "NQ"
+    ret
+
+type MonthlyQuarter
+    int   quarter_id  // 1-4
+    float high
+    float low
+    int   start_bar
+    int   start_time
+    box   vis_box
+    // High/Low Bar Indices
+    int   high_bar
+    int   low_bar
+    // Comparison Symbol 1
+    float s1_high
+    float s1_low
+    // Comparison Symbol 2
+    float s2_high
+    float s2_low
+    // SMT Lines
+    line  smt_line
+    label smt_label
+
+type WeeklyQuarter
+    int   quarter_id  // 1=Q1, 2=Q2, 3=Q3, 4=Q4
+    float high
+    float low
+    int   start_bar
+    int   start_time
+    box   vis_box
+    // High/Low Bar Indices
+    int   high_bar
+    int   low_bar
+    // Comparison Symbol 1
+    float s1_high
+    float s1_low
+    // Comparison Symbol 2
+    float s2_high
+    float s2_low
+    // SMT Lines
+    line  smt_line
+    label smt_label
+
+type DailyQuarter
+    int   quarter_id  // 1-4
+    float high
+    float low
+    int   start_bar
+    int   start_time
+    box   vis_box
+    // High/Low Bar Indices
+    int   high_bar
+    int   low_bar
+    // Comparison Symbol 1
+    float s1_high
+    float s1_low
+    // Comparison Symbol 2
+    float s2_high
+    float s2_low
+    // SMT Lines
+    line  smt_line
+    label smt_label
+
+type SessionQuarter
+    int   quarter_id  // 1-4
+    float high
+    float low
+    int   start_bar
+    int   start_time
+    box   vis_box
+    // High/Low Bar Indices
+    int   high_bar
+    int   low_bar
+    // Comparison Symbol 1
+    float s1_high
+    float s1_low
+    // Comparison Symbol 2
+    float s2_high
+    float s2_low
+    // SMT Lines
+    line  smt_line
+    label smt_label
+
+type MicroQuarter
+    int   quarter_id  // 1-4
+    float high
+    float low
+    int   start_bar
+    int   start_time
+    box   vis_box
+    // High/Low Bar Indices
+    int   high_bar
+    int   low_bar
+    // Comparison Symbol 1
+    float s1_high
+    float s1_low
+    // Comparison Symbol 2
+    float s2_high
+    float s2_low
+    // SMT Lines
+    line  smt_line
+    label smt_label
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TIME CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// NY Time
+ny_h  = hour(time, "America/New_York")
+ny_m  = minute(time, "America/New_York")
+ny_wd = dayofweek(time, "America/New_York")
+
+// Calculate Trading Day (starts 18:00 previous day)
+int t_wd = ny_wd
+if ny_h >= 18
+    t_wd := t_wd + 1
+    if t_wd > 7
+        t_wd := 1
+
+// Detect new trading day (18:00 NY)
+var int prev_t_wd = na
+bool is_new_day = not na(prev_t_wd) and t_wd != prev_t_wd
+prev_t_wd := t_wd
+
+// Track current trading day start time for micro quarters
+var int current_day_start_time = na
+if is_new_day
+    current_day_start_time := time
+else if na(current_day_start_time)
+    current_day_start_time := time
+
+// Check if current bar is on current trading day
+bool is_current_day = not na(current_day_start_time) and time >= current_day_start_time
+
+// Month tracking (used by Monthly Quarters and TMO)
+var int curr_month = month(time, "America/New_York")
+var int prev_month = na
+
+// 60-day lookback limit for quarters
+int lookback_ms = 60 * 24 * 60 * 60 * 1000  // 60 days in milliseconds
+int cutoff_time = timenow - lookback_ms
+bool within_lookback = time >= cutoff_time
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMT HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Reduce digits for 369 logic
+reduceDigits(n) =>
+    val = n
+    if val > 9
+        val := math.floor(val / 10) + (val % 10)
+    if val > 9
+        val := math.floor(val / 10) + (val % 10)
+    val
+
+// Get 369 value from timestamp
+get369(timestamp) =>
+    h = hour(timestamp, "America/New_York") // Fixed to NY for consistency
+    m = minute(timestamp, "America/New_York")
+    
+    // 1. Full Time Sum (HH + MM digits)
+    sumHHMM = reduceDigits(math.floor(h / 10) + (h % 10) + math.floor(m / 10) + (m % 10))
+    
+    // 2. Minutes Only Sum
+    sumMM = reduceDigits(m)
+    
+    // Prioritize Minutes Only
+    res = 0
+    if sumMM == 3 or sumMM == 6 or sumMM == 9
+        res := sumMM
+    else if sumHHMM == 3 or sumHHMM == 6 or sumHHMM == 9
+        res := sumHHMM
+    res
+
+// Get SMT Line Style
+get_smt_lst(style_str) =>
+    switch style_str
+        "Solid" => line.style_solid
+        "Dotted" => line.style_dotted
+        "Dashed" => line.style_dashed
+        => line.style_solid
+
+// Fetch Comparison Data
+[s1_h, s1_l, s1_c] = request.security(symbol1, timeframe.period, [high, low, close], ignore_invalid_symbol=true)
+[s2_h, s2_l, s2_c] = request.security(symbol2, timeframe.period, [high, low, close], ignore_invalid_symbol=true)
+
+s1_abbr = getAbbr(symbol1)
+s2_abbr = getAbbr(symbol2)
+
+// Abbreviation Logic moved to line 110
+
+
+// Invalidation Check
+check_invalidation(line l, bool is_bearish) =>
+    if not na(l)
+        val = line.get_y2(l)
+        if is_bearish
+            if high > val
+                line.delete(l)
+        else
+            if low < val
+                line.delete(l)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUALS: DAY SEPARATORS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if is_new_day and show_dsep and timeframe.in_seconds(timeframe.period) <= 3600
+    line.new(bar_index, low, bar_index, high, xloc=xloc.bar_index, extend=extend.both, color=c_dsep, style=line.style_dotted)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUALS: DAY LABELS (Inline at Top)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Trigger at 06:00 NY (midpoint between 18:00 separators)
+is_mid_day = ny_h == 6 and ny_m == 0
+
+// Conditions for each day
+c_inv = color.new(color.white, 100)
+is_mon = show_wd and t_wd == dayofweek.monday    and is_mid_day
+is_tue = show_wd and t_wd == dayofweek.tuesday   and is_mid_day
+is_wed = show_wd and t_wd == dayofweek.wednesday and is_mid_day
+is_thu = show_wd and t_wd == dayofweek.thursday  and is_mid_day
+is_fri = show_wd and t_wd == dayofweek.friday    and is_mid_day
+
+// Plot day labels at top (inline positioning)
+plotshape(is_mon, "Monday",    shape.labelup, location.top, c_inv, 0, "MONDAY",    c_text, size=size.small)
+plotshape(is_tue, "Tuesday",   shape.labelup, location.top, c_inv, 0, "TUESDAY",   c_text, size=size.small)
+plotshape(is_wed, "Wednesday", shape.labelup, location.top, c_inv, 0, "WEDNESDAY", c_text, size=size.small)
+plotshape(is_thu, "Thursday",  shape.labelup, location.top, c_inv, 0, "THURSDAY",  c_text, size=size.small)
+plotshape(is_fri, "Friday",    shape.labelup, location.top, c_inv, 0, "FRIDAY",    c_text, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MONTHLY QUARTERS (4 quarters per month, ~1 week each, Mon-Mon at 18:00)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var MonthlyQuarter mthq_curr = na
+var MonthlyQuarter mthq_prev = na
+var color mthq_color = na
+var int mthq_monday_count = 0
+
+// Update month tracking on every bar
+curr_month := month(time, "America/New_York")
+
+// Reset Monday counter at start of new month
+if not na(prev_month) and curr_month != prev_month
+    mthq_monday_count := 0
+    prev_month := curr_month
+
+// Count Mondays and determine quarterly period
+if show_mthq and is_new_day and t_wd == dayofweek.monday and within_lookback
+    mthq_monday_count += 1
+    
+    // Determine which quarter (1-4) based on Monday count
+    int curr_mthq = math.min(4, mthq_monday_count)
+    
+    // Always close previous box and create new one on Monday
+    if not na(mthq_curr) and not na(mthq_curr.vis_box)
+        box.set_right(mthq_curr.vis_box, bar_index - 1)
+        // Store as previous finished quarter
+        mthq_prev := mthq_curr
+    
+    // Get quarter color (Q1=gray, Q2=red, Q3=green, Q4=blue)
+    if curr_mthq == 1
+        mthq_color := color.new(c_q1, opacity)  // Gray
+    else if curr_mthq == 2
+        mthq_color := color.new(c_q2, opacity)  // Red
+    else if curr_mthq == 3
+        mthq_color := color.new(c_q3, opacity)  // Green
+    else if curr_mthq == 4
+        mthq_color := color.new(c_q4, opacity)    // Start new quarter
+    // Push previous SMT to history if exists
+    if not na(mthq_curr) and not na(mthq_curr.smt_line)
+        add_smt_history(mthq_curr.smt_line, mthq_curr.smt_label)
+        
+    mthq_prev := mthq_curr
+    
+    // Create new monthly quarter - Init comparison symbols
+    mthq_curr := MonthlyQuarter.new(curr_mthq, high, low, bar_index, time, na, bar_index, bar_index, s1_h, s1_l, s2_h, s2_l, na, na) // Updated constructor
+    
+    // Draw box with same styling as other quarters
+    if not na(mthq_color)
+        mthq_curr.vis_box := box.new(bar_index, high, bar_index, low, 
+                                     border_color=mthq_color, 
+                                     bgcolor=mthq_color, 
+                                     xloc=xloc.bar_index)
+else if show_mthq and not na(mthq_curr)
+    // Update on non-Monday days
+    if high > mthq_curr.high
+        mthq_curr.high := high
+        mthq_curr.high_bar := bar_index
+    if low < mthq_curr.low
+        mthq_curr.low := low
+        mthq_curr.low_bar := bar_index
+    
+    // Update comparison symbols
+    if not na(s1_h)
+        mthq_curr.s1_high := math.max(mthq_curr.s1_high, s1_h)
+        mthq_curr.s1_low := math.min(mthq_curr.s1_low, s1_l)
+    if not na(s2_h)
+        mthq_curr.s2_high := math.max(mthq_curr.s2_high, s2_h)
+        mthq_curr.s2_low := math.min(mthq_curr.s2_low, s2_l)
+    
+    if not na(mthq_curr.vis_box)
+        box.set_right(mthq_curr.vis_box, bar_index)
+        box.set_top(mthq_curr.vis_box, mthq_curr.high)
+        box.set_bottom(mthq_curr.vis_box, mthq_curr.low)
+    
+    // SMT Detection (Current vs Previous Finished)
+    if vis_smt_mth and not na(mthq_prev)
+        bool bear_smt = false
+        bool bull_smt = false
+        string smt_sym = ""
+        
+        // 1. Bearish SMT (Highs)
+        // Main HH vs S1/S2 LH (Regular)
+        if mthq_curr.high > mthq_prev.high
+            if not na(s1_h) and mthq_curr.s1_high < mthq_prev.s1_high
+                bear_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+            if not na(s2_h) and mthq_curr.s2_high < mthq_prev.s2_high
+                bear_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+        // Main LH vs S1/S2 HH (Inverse)
+        else if mthq_curr.high < mthq_prev.high
+            if not na(s1_h) and mthq_curr.s1_high > mthq_prev.s1_high
+                bear_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+            if not na(s2_h) and mthq_curr.s2_high > mthq_prev.s2_high
+                bear_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+
+        // 2. Bullish SMT (Lows)
+        // Main LL vs S1/S2 HL (Regular)
+        if mthq_curr.low < mthq_prev.low
+            if not na(s1_l) and mthq_curr.s1_low > mthq_prev.s1_low
+                bull_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+            if not na(s2_l) and mthq_curr.s2_low > mthq_prev.s2_low
+                bull_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+        // Main HL vs S1/S2 LL (Inverse)
+        else if mthq_curr.low > mthq_prev.low
+            if not na(s1_l) and mthq_curr.s1_low < mthq_prev.s1_low
+                bull_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+            if not na(s2_l) and mthq_curr.s2_low < mthq_prev.s2_low
+                bull_smt := true
+                smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+
+
+        // Draw SMT
+        if bear_smt
+            // Clean old
+            if not na(mthq_curr.smt_line)
+                line.delete(mthq_curr.smt_line)
+                label.delete(mthq_curr.smt_label)
+            
+            // Validate 369 if enabled
+            bool valid = true
+            if use_369
+                // Check deviation/invalidation
+                // Here we just check 369 time of start
+                if get369(time) == 0
+                    valid := true // For now keep simple, or implement specific logic
+
+            if valid
+                mthq_curr.smt_line := line.new(mthq_prev.high_bar, mthq_prev.high, mthq_curr.high_bar, mthq_curr.high, xloc=xloc.bar_index, color=c_smt_bear, width=smt_width, style=get_smt_lst(smt_style))
+                mthq_curr.smt_label := label.new(math.floor((mthq_prev.high_bar + mthq_curr.high_bar)/2), mthq_curr.high, "Mth " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=color.new(color.white, 100), textcolor=c_smt_bear, size=size.small)
+        
+        if bull_smt
+             // Clean old
+            if not na(mthq_curr.smt_line)
+                line.delete(mthq_curr.smt_line)
+                label.delete(mthq_curr.smt_label)
+            
+            mthq_curr.smt_line := line.new(mthq_prev.low_bar, mthq_prev.low, mthq_curr.low_bar, mthq_curr.low, xloc=xloc.bar_index, color=c_smt_bull, width=smt_width, style=get_smt_lst(smt_style))
+            mthq_curr.smt_label := label.new(math.floor((mthq_prev.low_bar + mthq_curr.low_bar)/2), mthq_curr.low, "Mth " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=color.new(color.white, 100), textcolor=c_smt_bull, size=size.small)
+
+        // Invalidation Logic (Price breaks SMT level)
+        if not na(mthq_curr.smt_line)
+            if bear_smt and high > mthq_prev.high
+                line.delete(mthq_curr.smt_line)
+                label.delete(mthq_curr.smt_label)
+                mthq_curr.smt_line := na
+            else if bull_smt and low < mthq_prev.low
+                line.delete(mthq_curr.smt_line)
+                label.delete(mthq_curr.smt_label)
+                mthq_curr.smt_line := na
+
+// Close monthly quarter box when Saturday starts (end of Friday)
+if t_wd == dayofweek.saturday and not na(mthq_curr) and not na(mthq_curr.vis_box)
+    box.set_right(mthq_curr.vis_box, bar_index - 1)
+    mthq_prev := mthq_curr
+    mthq_curr := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WEEKLY QUARTERS (Monday-Thursday)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var WeeklyQuarter wq_curr = na
+var WeeklyQuarter wq_prev = na
+
+if show_wq and within_lookback
+    if is_new_day
+        // Close previous weekly quarter box if exists
+        if not na(wq_curr) and not na(wq_curr.vis_box)
+            box.set_right(wq_curr.vis_box, bar_index - 1)
+            wq_prev := wq_curr
+        
+        // Start new weekly quarter (Q1-Q4, skip Friday)
+        if t_wd >= dayofweek.monday and t_wd <= dayofweek.thursday
+            int quarter_id = 0
+            color quarter_col = na
+            
+            if t_wd == dayofweek.monday
+                quarter_id := 1
+                quarter_col := color.new(c_q1, opacity)
+            else if t_wd == dayofweek.tuesday
+                quarter_id := 2
+                quarter_col := color.new(c_q2, opacity)
+            else if t_wd == dayofweek.wednesday
+                quarter_id := 3
+                quarter_col := color.new(c_q3, opacity)
+            else if t_wd == dayofweek.thursday
+                quarter_id := 4
+                quarter_col := color.new(c_q4, opacity)
+            
+            // Push previous SMT to history if exists
+            if not na(wq_curr) and not na(wq_curr.smt_line)
+                add_smt_history(wq_curr.smt_line, wq_curr.smt_label)
+
+            wq_prev := wq_curr
+            
+            // Create new weekly quarter
+            wq_curr := WeeklyQuarter.new(quarter_id, high, low, bar_index, time, na, bar_index, bar_index, s1_h, s1_l, s2_h, s2_l, na, na)
+            
+            // Draw box
+            wq_curr.vis_box := box.new(bar_index, high, bar_index, low, 
+                                       border_color=quarter_col, 
+                                       bgcolor=quarter_col, 
+                                       xloc=xloc.bar_index)
+        else
+            wq_curr := na
+    else
+        // Update current weekly quarter
+        if not na(wq_curr)
+            if high > wq_curr.high
+                wq_curr.high := high
+                wq_curr.high_bar := bar_index
+            if low < wq_curr.low
+                wq_curr.low := low
+                wq_curr.low_bar := bar_index
+            
+            // Update comparison symbols (ensure valid before updating)
+            if not na(s1_h)
+                wq_curr.s1_high := math.max(wq_curr.s1_high, s1_h)
+                wq_curr.s1_low := math.min(wq_curr.s1_low, s1_l)
+            if not na(s2_h)
+                wq_curr.s2_high := math.max(wq_curr.s2_high, s2_h)
+                wq_curr.s2_low := math.min(wq_curr.s2_low, s2_l)
+
+            // Update box
+            if not na(wq_curr.vis_box)
+                box.set_right(wq_curr.vis_box, bar_index)
+                box.set_top(wq_curr.vis_box, wq_curr.high)
+                box.set_bottom(wq_curr.vis_box, wq_curr.low)
+                
+            // SMT Detection
+            if vis_smt_wk and not na(wq_prev)
+                bool bear_smt = false
+                bool bull_smt = false
+                string smt_sym = ""
+                
+                // 1. Bearish SMT
+                if wq_curr.high > wq_prev.high
+                    if not na(s1_h) and wq_curr.s1_high < wq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and wq_curr.s2_high < wq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if wq_curr.high < wq_prev.high
+                    if not na(s1_h) and wq_curr.s1_high > wq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and wq_curr.s2_high > wq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                
+                // 2. Bullish SMT
+                if wq_curr.low < wq_prev.low
+                    if not na(s1_l) and wq_curr.s1_low > wq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and wq_curr.s2_low > wq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if wq_curr.low > wq_prev.low
+                    if not na(s1_l) and wq_curr.s1_low < wq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and wq_curr.s2_low < wq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+
+                
+                // Draw SMT
+                if bear_smt
+                     // Clean old
+                    if not na(wq_curr.smt_line)
+                        line.delete(wq_curr.smt_line)
+                        label.delete(wq_curr.smt_label)
+                    
+                    wq_curr.smt_line := line.new(wq_prev.high_bar, wq_prev.high, wq_curr.high_bar, wq_curr.high, xloc=xloc.bar_index, color=c_smt_bear, width=smt_width, style=get_smt_lst(smt_style))
+                    wq_curr.smt_label := label.new(math.floor((wq_prev.high_bar + wq_curr.high_bar)/2), wq_curr.high, "W " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=color.new(color.white, 100), textcolor=c_smt_bear, size=size.small)
+                
+                if bull_smt
+                     // Clean old
+                    if not na(wq_curr.smt_line)
+                        line.delete(wq_curr.smt_line)
+                        label.delete(wq_curr.smt_label)
+                    
+                    wq_curr.smt_line := line.new(wq_prev.low_bar, wq_prev.low, wq_curr.low_bar, wq_curr.low, xloc=xloc.bar_index, color=c_smt_bull, width=smt_width, style=get_smt_lst(smt_style))
+                    wq_curr.smt_label := label.new(math.floor((wq_prev.low_bar + wq_curr.low_bar)/2), wq_curr.low, "W " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=color.new(color.white, 100), textcolor=c_smt_bull, size=size.small)
+                
+                // Invalidation
+                if not na(wq_curr.smt_line)
+                    if bear_smt and high > wq_prev.high
+                        line.delete(wq_curr.smt_line)
+                        label.delete(wq_curr.smt_label)
+                        wq_curr.smt_line := na
+                    else if bull_smt and low < wq_prev.low
+                        line.delete(wq_curr.smt_line)
+                        label.delete(wq_curr.smt_label)
+                        wq_curr.smt_line := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DAILY QUARTERS (4 quarters per day, 6 hours each)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var DailyQuarter dq_curr = na
+var DailyQuarter dq_prev = na
+var color dq_color = na
+
+// Draw on all 5 days, or skip Friday if checkbox disabled
+if show_dq and (show_friday or t_wd != dayofweek.friday) and within_lookback
+    // Calculate current quarter (1-4) based on hours from 18:00
+    // Q1: 18:00-00:00 (6h), Q2: 00:00-06:00 (6h), Q3: 06:00-12:00 (6h), Q4: 12:00-18:00 (6h)
+    int hours_from_start = ny_h >= 18 ? ny_h - 18 : ny_h + 6
+    int curr_q = math.floor(hours_from_start / 6) + 1
+    curr_q := math.min(4, math.max(1, curr_q))
+    
+    bool new_dq = na(dq_curr) or curr_q != dq_curr.quarter_id or is_new_day
+    
+    if new_dq
+        // Close previous quarter box if exists
+        if not na(dq_curr) and not na(dq_curr.vis_box)
+            box.set_right(dq_curr.vis_box, bar_index - 1)
+        // Push previous SMT
+        if not na(dq_curr) and not na(dq_curr.smt_line)
+            add_smt_history(dq_curr.smt_line, dq_curr.smt_label)
+
+        dq_prev := dq_curr
+
+        // Get quarter color (Q1=gray, Q2=red, Q3=green, Q4=blue)
+        if curr_q == 1
+            dq_color := color.new(c_q1, opacity)  // Gray
+        else if curr_q == 2
+            dq_color := color.new(c_q2, opacity)  // Red
+        else if curr_q == 3
+            dq_color := color.new(c_q3, opacity)  // Green
+        else if curr_q == 4
+            dq_color := color.new(c_q4, opacity)  // Blue
+        
+        // Create new daily quarter
+        dq_curr := DailyQuarter.new(curr_q, high, low, bar_index, time, na, bar_index, bar_index, s1_h, s1_l, s2_h, s2_l, na, na)
+        
+        // Draw box
+        if not na(dq_color)
+            dq_curr.vis_box := box.new(bar_index, high, bar_index, low, 
+                                       border_color=dq_color, 
+                                       bgcolor=dq_color, 
+                                       xloc=xloc.bar_index)
+    else
+        // Update current daily quarter
+        if not na(dq_curr)
+            if high > dq_curr.high
+                dq_curr.high := high
+                dq_curr.high_bar := bar_index
+            if low < dq_curr.low
+                dq_curr.low := low
+                dq_curr.low_bar := bar_index
+            
+            // Update comparison symbols
+            if not na(s1_h)
+                dq_curr.s1_high := math.max(dq_curr.s1_high, s1_h)
+                dq_curr.s1_low := math.min(dq_curr.s1_low, s1_l)
+            if not na(s2_h)
+                dq_curr.s2_high := math.max(dq_curr.s2_high, s2_h)
+                dq_curr.s2_low := math.min(dq_curr.s2_low, s2_l)
+
+            // Update box
+            if not na(dq_curr.vis_box)
+                box.set_right(dq_curr.vis_box, bar_index)
+                box.set_top(dq_curr.vis_box, dq_curr.high)
+                box.set_bottom(dq_curr.vis_box, dq_curr.low)
+            
+            // SMT Detection
+            if vis_smt_day and not na(dq_prev)
+                bool bear_smt = false
+                bool bull_smt = false
+                string smt_sym = ""
+                
+                // 1. Bearish SMT
+                if dq_curr.high > dq_prev.high
+                    if not na(s1_h) and dq_curr.s1_high < dq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and dq_curr.s2_high < dq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if dq_curr.high < dq_prev.high
+                    if not na(s1_h) and dq_curr.s1_high > dq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and dq_curr.s2_high > dq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                
+                // 2. Bullish SMT
+                if dq_curr.low < dq_prev.low
+                    if not na(s1_l) and dq_curr.s1_low > dq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and dq_curr.s2_low > dq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if dq_curr.low > dq_prev.low
+                    if not na(s1_l) and dq_curr.s1_low < dq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and dq_curr.s2_low < dq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+
+                
+                // Draw SMT
+                if bear_smt
+                     // Clean old
+                    if not na(dq_curr.smt_line)
+                        line.delete(dq_curr.smt_line)
+                        label.delete(dq_curr.smt_label)
+                    
+                    dq_curr.smt_line := line.new(dq_prev.high_bar, dq_prev.high, dq_curr.high_bar, dq_curr.high, xloc=xloc.bar_index, color=c_smt_bear, width=smt_width, style=get_smt_lst(smt_style))
+                    dq_curr.smt_label := label.new(math.floor((dq_prev.high_bar + dq_curr.high_bar)/2), dq_curr.high, "D " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=color.new(color.white, 100), textcolor=c_smt_bear, size=size.small)
+                
+                if bull_smt
+                     // Clean old
+                    if not na(dq_curr.smt_line)
+                        line.delete(dq_curr.smt_line)
+                        label.delete(dq_curr.smt_label)
+                    
+                    dq_curr.smt_line := line.new(dq_prev.low_bar, dq_prev.low, dq_curr.low_bar, dq_curr.low, xloc=xloc.bar_index, color=c_smt_bull, width=smt_width, style=get_smt_lst(smt_style))
+                    dq_curr.smt_label := label.new(math.floor((dq_prev.low_bar + dq_curr.low_bar)/2), dq_curr.low, "D " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=color.new(color.white, 100), textcolor=c_smt_bull, size=size.small)
+                
+                // Invalidation
+                if not na(dq_curr.smt_line)
+                    if bear_smt and high > dq_prev.high
+                        line.delete(dq_curr.smt_line)
+                        label.delete(dq_curr.smt_label)
+                        dq_curr.smt_line := na
+                    else if bull_smt and low < dq_prev.low
+                        line.delete(dq_curr.smt_line)
+                        label.delete(dq_curr.smt_label)
+                        dq_curr.smt_line := na
+
+// Close daily quarter box if Friday ends (Saturday starts)
+if t_wd == dayofweek.saturday and not na(dq_curr) and not na(dq_curr.vis_box)
+    box.set_right(dq_curr.vis_box, bar_index - 1)
+    dq_prev := dq_curr
+    dq_curr := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SESSION QUARTERS (4 quarters per daily quarter, 1.5 hours each)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var SessionQuarter sq_curr = na
+var SessionQuarter sq_prev = na
+var color sq_color = na
+
+// Draw on all 5 days, or skip Friday if checkbox disabled
+if show_sq and (show_friday or t_wd != dayofweek.friday) and within_lookback
+    // Calculate current session quarter (1-4) based on minutes within 6h period
+    // Each daily quarter is 6h (360 min), divided into 4 = 90 min (1.5h) each
+    int mins_from_dq_start = (ny_h * 60 + ny_m) % 360
+    int curr_sq = math.floor(mins_from_dq_start / 90) + 1
+    curr_sq := math.min(4, math.max(1, curr_sq))
+    
+    bool new_sq = na(sq_curr) or curr_sq != sq_curr.quarter_id or is_new_day
+    
+    if new_sq
+        // Close previous session quarter box if exists
+        if not na(sq_curr) and not na(sq_curr.vis_box)
+            box.set_right(sq_curr.vis_box, bar_index - 1)
+        // Push previous SMT
+        if not na(sq_curr) and not na(sq_curr.smt_line)
+            add_smt_history(sq_curr.smt_line, sq_curr.smt_label)
+
+        sq_prev := sq_curr
+        
+        // Get quarter color (Q1=gray, Q2=red, Q3=green, Q4=blue)
+        if curr_sq == 1
+            sq_color := color.new(c_q1, opacity)  // Gray
+        else if curr_sq == 2
+            sq_color := color.new(c_q2, opacity)  // Red
+        else if curr_sq == 3
+            sq_color := color.new(c_q3, opacity)  // Green
+        else if curr_sq == 4
+            sq_color := color.new(c_q4, opacity)  // Blue
+        
+        // Create new session quarter
+        sq_curr := SessionQuarter.new(curr_sq, high, low, bar_index, time, na, bar_index, bar_index, s1_h, s1_l, s2_h, s2_l, na, na)
+        
+        // Draw box
+        if not na(sq_color)
+            sq_curr.vis_box := box.new(bar_index, high, bar_index, low, 
+                                       border_color=sq_color, 
+                                       bgcolor=sq_color, 
+                                       xloc=xloc.bar_index)
+    else
+        // Update current session quarter
+        if not na(sq_curr)
+            if high > sq_curr.high
+                sq_curr.high := high
+                sq_curr.high_bar := bar_index
+            if low < sq_curr.low
+                sq_curr.low := low
+                sq_curr.low_bar := bar_index
+            
+            // Update comparison symbols
+            if not na(s1_h)
+                sq_curr.s1_high := math.max(sq_curr.s1_high, s1_h)
+                sq_curr.s1_low := math.min(sq_curr.s1_low, s1_l)
+            if not na(s2_h)
+                sq_curr.s2_high := math.max(sq_curr.s2_high, s2_h)
+                sq_curr.s2_low := math.min(sq_curr.s2_low, s2_l)
+
+            // Update box
+            if not na(sq_curr.vis_box)
+                box.set_right(sq_curr.vis_box, bar_index)
+                box.set_top(sq_curr.vis_box, sq_curr.high)
+                box.set_bottom(sq_curr.vis_box, sq_curr.low)
+            
+            // SMT Detection
+            if vis_smt_sess and not na(sq_prev)
+                bool bear_smt = false
+                bool bull_smt = false
+                string smt_sym = ""
+                
+                // 1. Bearish SMT
+                if sq_curr.high > sq_prev.high
+                    if not na(s1_h) and sq_curr.s1_high < sq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and sq_curr.s2_high < sq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if sq_curr.high < sq_prev.high
+                    if not na(s1_h) and sq_curr.s1_high > sq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and sq_curr.s2_high > sq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                
+                // 2. Bullish SMT
+                if sq_curr.low < sq_prev.low
+                    if not na(s1_l) and sq_curr.s1_low > sq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and sq_curr.s2_low > sq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if sq_curr.low > sq_prev.low
+                    if not na(s1_l) and sq_curr.s1_low < sq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and sq_curr.s2_low < sq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+
+                
+                // Draw SMT
+                if bear_smt
+                     // Clean old
+                    if not na(sq_curr.smt_line)
+                        line.delete(sq_curr.smt_line)
+                        label.delete(sq_curr.smt_label)
+                    
+                    sq_curr.smt_line := line.new(sq_prev.high_bar, sq_prev.high, sq_curr.high_bar, sq_curr.high, xloc=xloc.bar_index, color=c_smt_bear, width=smt_width, style=get_smt_lst(smt_style))
+                    sq_curr.smt_label := label.new(math.floor((sq_prev.high_bar + sq_curr.high_bar)/2), sq_curr.high, "S " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=color.new(color.white, 100), textcolor=c_smt_bear, size=size.small)
+                
+                if bull_smt
+                     // Clean old
+                    if not na(sq_curr.smt_line)
+                        line.delete(sq_curr.smt_line)
+                        label.delete(sq_curr.smt_label)
+                    
+                    sq_curr.smt_line := line.new(sq_prev.low_bar, sq_prev.low, sq_curr.low_bar, sq_curr.low, xloc=xloc.bar_index, color=c_smt_bull, width=smt_width, style=get_smt_lst(smt_style))
+                    sq_curr.smt_label := label.new(math.floor((sq_prev.low_bar + sq_curr.low_bar)/2), sq_curr.low, "S " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=color.new(color.white, 100), textcolor=c_smt_bull, size=size.small)
+                
+                // Invalidation
+                if not na(sq_curr.smt_line)
+                    if bear_smt and high > sq_prev.high
+                        line.delete(sq_curr.smt_line)
+                        label.delete(sq_curr.smt_label)
+                        sq_curr.smt_line := na
+                    else if bull_smt and low < sq_prev.low
+                        line.delete(sq_curr.smt_line)
+                        label.delete(sq_curr.smt_label)
+                        sq_curr.smt_line := na
+
+// Close session quarter box if Friday ends (Saturday starts)
+if t_wd == dayofweek.saturday and not na(sq_curr) and not na(sq_curr.vis_box)
+    box.set_right(sq_curr.vis_box, bar_index - 1)
+    sq_prev := sq_curr
+    sq_curr := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MICRO QUARTERS (4 quarters per session quarter, ~22.5 minutes each)
+// Only visible for current trading day - old boxes deleted when new day starts
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var MicroQuarter mq_curr = na
+var MicroQuarter mq_prev = na
+var color mq_color = na
+var array<box> mq_boxes = array.new<box>()
+
+// Delete all old micro quarter boxes when new day starts
+if is_new_day and array.size(mq_boxes) > 0
+    for i = 0 to array.size(mq_boxes) - 1
+        box.delete(array.get(mq_boxes, i))
+    array.clear(mq_boxes)
+    mq_prev := na
+    mq_curr := na
+
+// Draw on all 5 days (current day only for micro), or skip Friday if checkbox disabled
+if show_mq and is_current_day and (show_friday or t_wd != dayofweek.friday)
+    // Calculate current micro quarter (1-4) based on minutes within 90min period
+    // Each session quarter is 90 min, divided into 4 = 22.5 min each
+    int mins_from_sq_start = (ny_h * 60 + ny_m) % 90
+    int curr_mq = math.floor(mins_from_sq_start / 22.5) + 1
+    curr_mq := math.min(4, math.max(1, curr_mq))
+    
+    bool new_mq = na(mq_curr) or curr_mq != mq_curr.quarter_id or is_new_day
+    
+    if new_mq
+        // Close previous micro quarter box if exists
+        if not na(mq_curr) and not na(mq_curr.vis_box)
+            box.set_right(mq_curr.vis_box, bar_index - 1)
+        // Push previous SMT
+        if not na(mq_curr) and not na(mq_curr.smt_line)
+            add_smt_history(mq_curr.smt_line, mq_curr.smt_label)
+
+        mq_prev := mq_curr
+        
+        // Get quarter color (Q1=gray, Q2=red, Q3=green, Q4=blue)
+        if curr_mq == 1
+            mq_color := color.new(c_q1, opacity)  // Gray
+        else if curr_mq == 2
+            mq_color := color.new(c_q2, opacity)  // Red
+        else if curr_mq == 3
+            mq_color := color.new(c_q3, opacity)  // Green
+        else if curr_mq == 4
+            mq_color := color.new(c_q4, opacity)  // Blue
+        
+        // Create new micro quarter
+        mq_curr := MicroQuarter.new(curr_mq, high, low, bar_index, time, na, bar_index, bar_index, s1_h, s1_l, s2_h, s2_l, na, na)
+        
+        // Draw box
+        if not na(mq_color)
+            mq_curr.vis_box := box.new(bar_index, high, bar_index, low, 
+                                       border_color=mq_color, 
+                                       bgcolor=mq_color, 
+                                       xloc=xloc.bar_index)
+            // Add to array for tracking
+            array.push(mq_boxes, mq_curr.vis_box)
+    else
+        // Update current micro quarter
+        if not na(mq_curr)
+            if high > mq_curr.high
+                mq_curr.high := high
+                mq_curr.high_bar := bar_index
+            if low < mq_curr.low
+                mq_curr.low := low
+                mq_curr.low_bar := bar_index
+            
+            // Update comparison symbols
+            if not na(s1_h)
+                mq_curr.s1_high := math.max(mq_curr.s1_high, s1_h)
+                mq_curr.s1_low := math.min(mq_curr.s1_low, s1_l)
+            if not na(s2_h)
+                mq_curr.s2_high := math.max(mq_curr.s2_high, s2_h)
+                mq_curr.s2_low := math.min(mq_curr.s2_low, s2_l)
+
+            // Update box
+            if not na(mq_curr.vis_box)
+                box.set_right(mq_curr.vis_box, bar_index)
+                box.set_top(mq_curr.vis_box, mq_curr.high)
+                box.set_bottom(mq_curr.vis_box, mq_curr.low)
+            
+            // SMT Detection
+            if vis_smt_micro and not na(mq_prev)
+                bool bear_smt = false
+                bool bull_smt = false
+                string smt_sym = ""
+                
+                // 1. Bearish SMT
+                if mq_curr.high > mq_prev.high
+                    if not na(s1_h) and mq_curr.s1_high < mq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and mq_curr.s2_high < mq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if mq_curr.high < mq_prev.high
+                    if not na(s1_h) and mq_curr.s1_high > mq_prev.s1_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_h) and mq_curr.s2_high > mq_prev.s2_high
+                        bear_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                
+                // 2. Bullish SMT
+                if mq_curr.low < mq_prev.low
+                    if not na(s1_l) and mq_curr.s1_low > mq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and mq_curr.s2_low > mq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+                else if mq_curr.low > mq_prev.low
+                    if not na(s1_l) and mq_curr.s1_low < mq_prev.s1_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s1_abbr
+                    if not na(s2_l) and mq_curr.s2_low < mq_prev.s2_low
+                        bull_smt := true
+                        smt_sym := smt_sym + (smt_sym == "" ? "" : "+") + s2_abbr
+
+                
+                // Draw SMT
+                if bear_smt
+                     // Clean old
+                    if not na(mq_curr.smt_line)
+                        line.delete(mq_curr.smt_line)
+                        label.delete(mq_curr.smt_label)
+                    
+                    mq_curr.smt_line := line.new(mq_prev.high_bar, mq_prev.high, mq_curr.high_bar, mq_curr.high, xloc=xloc.bar_index, color=c_smt_bear, width=smt_width, style=get_smt_lst(smt_style))
+                    mq_curr.smt_label := label.new(math.floor((mq_prev.high_bar + mq_curr.high_bar)/2), mq_curr.high, "M " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=color.new(color.white, 100), textcolor=c_smt_bear, size=size.small)
+                
+                if bull_smt
+                     // Clean old
+                    if not na(mq_curr.smt_line)
+                        line.delete(mq_curr.smt_line)
+                        label.delete(mq_curr.smt_label)
+                    
+                    mq_curr.smt_line := line.new(mq_prev.low_bar, mq_prev.low, mq_curr.low_bar, mq_curr.low, xloc=xloc.bar_index, color=c_smt_bull, width=smt_width, style=get_smt_lst(smt_style))
+                    mq_curr.smt_label := label.new(math.floor((mq_prev.low_bar + mq_curr.low_bar)/2), mq_curr.low, "M " + smt_sym, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=color.new(color.white, 100), textcolor=c_smt_bull, size=size.small)
+                
+                // Invalidation
+                if not na(mq_curr.smt_line)
+                    if bear_smt and high > mq_prev.high
+                        line.delete(mq_curr.smt_line)
+                        label.delete(mq_curr.smt_label)
+                        mq_curr.smt_line := na
+                    else if bull_smt and low < mq_prev.low
+                        line.delete(mq_curr.smt_line)
+                        label.delete(mq_curr.smt_label)
+                        mq_curr.smt_line := na
+
+// Close micro quarter box if Friday ends (Saturday starts)
+if t_wd == dayofweek.saturday and not na(mq_curr) and not na(mq_curr.vis_box)
+    box.set_right(mq_curr.vis_box, bar_index - 1)
+    mq_prev := mq_curr
+    mq_curr := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TMO - TRUE MONTH OPEN (Second Monday = Monthly Q2 Open)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line tmo_line = na
+var label tmo_label = na
+var float tmo_price = na
+var int tmo_start_bar = na
+
+// Update month tracking
+curr_month := month(time, "America/New_York")
+
+// Update prev_month for next comparison
+prev_month := curr_month
+
+// Detect second Monday at 18:00 NY (use same counter as monthly quarters)
+if is_new_day and t_wd == dayofweek.monday
+    // Second Monday - capture TMO (Q2 of monthly quarters)
+    if mthq_monday_count == 2 and show_tmo
+        tmo_price := open
+        tmo_start_bar := bar_index
+        
+        // Only delete old label, keep old line visible until new TMO line is drawn
+        if not na(tmo_label)
+            label.delete(tmo_label)
+        
+        // Delete old line now that we're creating new one
+        if not na(tmo_line)
+            line.delete(tmo_line)
+        
+        // Draw new line (will extend to current bar + 2)
+        tmo_line := line.new(tmo_start_bar, tmo_price, bar_index + 2, tmo_price, 
+                             xloc=xloc.bar_index, 
+                             extend=extend.none, 
+                             color=c_tmo, 
+                             style=get_lst(s_tmo), 
+                             width=w_tmo)
+        
+        // Draw label at end of line
+        tmo_label := label.new(bar_index + 2, tmo_price, "TMO", 
+                               xloc=xloc.bar_index, 
+                               yloc=yloc.price, 
+                               color=color.new(color.white, 100), 
+                               textcolor=c_tmo, 
+                               style=label.style_label_left, 
+                               size=size.small)
+
+// Update line to extend to current bar + 2 and move label to end
+if not na(tmo_line) and show_tmo
+    line.set_x2(tmo_line, bar_index + 2)
+    if not na(tmo_label)
+        label.set_x(tmo_label, bar_index + 2)
+else if na(tmo_line) and not na(tmo_price) and show_tmo
+    // Recreate line if it was deleted but we have a price
+    tmo_line := line.new(tmo_start_bar, tmo_price, bar_index + 2, tmo_price, 
+                         xloc=xloc.bar_index, extend=extend.none, 
+                         color=c_tmo, style=get_lst(s_tmo), width=w_tmo)
+    tmo_label := label.new(bar_index + 2, tmo_price, "TMO", 
+                           xloc=xloc.bar_index, yloc=yloc.price, 
+                           color=color.new(color.white, 100), textcolor=c_tmo, 
+                           style=label.style_label_left, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TWO - TRUE WEEK OPEN (Monday 18:00 close)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line two_line = na
+var label two_label = na
+var float two_price = na
+
+// Detect Monday at 18:00 NY and capture close price
+if is_new_day and t_wd == dayofweek.monday and show_two
+    two_price := close
+    
+    // Delete old line and label
+    if not na(two_line)
+        line.delete(two_line)
+    if not na(two_label)
+        label.delete(two_label)
+    
+    // Draw new line
+    two_line := line.new(bar_index, two_price, bar_index + 2, two_price, 
+                         xloc=xloc.bar_index, 
+                         extend=extend.none, 
+                         color=c_two, 
+                         style=get_lst(s_two), 
+                         width=w_two)
+    
+    // Draw label at end of line
+    two_label := label.new(bar_index + 2, two_price, "TWO", 
+                           xloc=xloc.bar_index, 
+                           yloc=yloc.price, 
+                           color=color.new(color.white, 100), 
+                           textcolor=c_two, 
+                           style=label.style_label_left, 
+                           size=size.small)
+
+// Update line to extend to current bar + 2 and move label to end
+if not na(two_line) and show_two
+    line.set_x2(two_line, bar_index + 2)
+    if not na(two_label)
+        label.set_x(two_label, bar_index + 2)
+else if na(two_line) and not na(two_price) and show_two
+    // Recreate line if it was deleted but we have a price
+    two_line := line.new(bar_index, two_price, bar_index + 2, two_price, 
+                         xloc=xloc.bar_index, extend=extend.none, 
+                         color=c_two, style=get_lst(s_two), width=w_two)
+    two_label := label.new(bar_index + 2, two_price, "TWO", 
+                           xloc=xloc.bar_index, yloc=yloc.price, 
+                           color=color.new(color.white, 100), textcolor=c_two, 
+                           style=label.style_label_left, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TDO - TRUE DAY OPEN (00:00 NY open, current day only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line tdo_line = na
+var label tdo_label = na
+var float tdo_price = na
+var int tdo_start_bar = na
+
+// Delete old TDO when new day starts
+if is_new_day
+    if not na(tdo_line)
+        line.delete(tdo_line)
+    if not na(tdo_label)
+        label.delete(tdo_label)
+    tdo_line := na
+    tdo_label := na
+
+// Detect 00:00 NY and capture open price (only on current day)
+if ny_h == 0 and ny_m == 0 and show_tdo and is_current_day
+    tdo_price := open
+    tdo_start_bar := bar_index
+    
+    // Delete old line and label
+    if not na(tdo_line)
+        line.delete(tdo_line)
+    if not na(tdo_label)
+        label.delete(tdo_label)
+    
+    // Draw new line
+    tdo_line := line.new(bar_index, tdo_price, bar_index + 2, tdo_price, 
+                         xloc=xloc.bar_index, 
+                         extend=extend.none, 
+                         color=c_tdo, 
+                         style=get_lst(s_tdo), 
+                         width=w_tdo)
+    
+    // Draw label at end of line
+    tdo_label := label.new(bar_index + 2, tdo_price, "True Day Open", 
+                           xloc=xloc.bar_index, 
+                           yloc=yloc.price, 
+                           color=color.new(color.white, 100), 
+                           textcolor=c_tdo, 
+                           style=label.style_label_left, 
+                           size=size.small)
+
+// Update line to extend to current bar + 2 and move label to end
+if not na(tdo_line) and show_tdo
+    line.set_x2(tdo_line, bar_index + 2)
+    if not na(tdo_label)
+        label.set_x(tdo_label, bar_index + 2)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TSO - TRUE SESSION OPENS (Q2 open for each session)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line tso_asia_line = na
+var label tso_asia_label = na
+var line tso_london_line = na
+var label tso_london_label = na
+var line tso_nyam_line = na
+var label tso_nyam_label = na
+var line tso_nypm_line = na
+var label tso_nypm_label = na
+
+// ASIA Q2: 19:30 NY
+if ny_h == 19 and ny_m == 30 and show_tso
+    float asia_price = open
+    
+    if not na(tso_asia_line)
+        line.delete(tso_asia_line)
+    if not na(tso_asia_label)
+        label.delete(tso_asia_label)
+    
+    tso_asia_line := line.new(bar_index, asia_price, bar_index + 2, asia_price, 
+                              xloc=xloc.bar_index, extend=extend.none, 
+                              color=c_tso, style=get_lst(s_tso), width=w_tso)
+    if show_tso_lbl
+        tso_asia_label := label.new(bar_index + 2, asia_price, "Asia Open", 
+                                    xloc=xloc.bar_index, yloc=yloc.price, 
+                                    color=color.new(color.white, 100), textcolor=c_tso, 
+                                    style=label.style_label_left, size=size.small)
+
+// LONDON Q2: 01:30 NY (also TDO)
+if ny_h == 1 and ny_m == 30 and show_tso
+    float london_price = open
+    
+    if not na(tso_london_line)
+        line.delete(tso_london_line)
+    if not na(tso_london_label)
+        label.delete(tso_london_label)
+    
+    tso_london_line := line.new(bar_index, london_price, bar_index + 2, london_price, 
+                                xloc=xloc.bar_index, extend=extend.none, 
+                                color=c_tso, style=get_lst(s_tso), width=w_tso)
+    if show_tso_lbl
+        tso_london_label := label.new(bar_index + 2, london_price, "London Open", 
+                                      xloc=xloc.bar_index, yloc=yloc.price, 
+                                      color=color.new(color.white, 100), textcolor=c_tso, 
+                                      style=label.style_label_left, size=size.small)
+
+// NY AM Q2: 07:30 NY
+if ny_h == 7 and ny_m == 30 and show_tso
+    float nyam_price = open
+    
+    if not na(tso_nyam_line)
+        line.delete(tso_nyam_line)
+    if not na(tso_nyam_label)
+        label.delete(tso_nyam_label)
+    
+    tso_nyam_line := line.new(bar_index, nyam_price, bar_index + 2, nyam_price, 
+                              xloc=xloc.bar_index, extend=extend.none, 
+                              color=c_tso, style=get_lst(s_tso), width=w_tso)
+    if show_tso_lbl
+        tso_nyam_label := label.new(bar_index + 2, nyam_price, "NY AM Open", 
+                                    xloc=xloc.bar_index, yloc=yloc.price, 
+                                    color=color.new(color.white, 100), textcolor=c_tso, 
+                                    style=label.style_label_left, size=size.small)
+
+// NY PM Q2: 13:30 NY
+if ny_h == 13 and ny_m == 30 and show_tso
+    float nypm_price = open
+    
+    if not na(tso_nypm_line)
+        line.delete(tso_nypm_line)
+    if not na(tso_nypm_label)
+        label.delete(tso_nypm_label)
+    
+    tso_nypm_line := line.new(bar_index, nypm_price, bar_index + 2, nypm_price, 
+                              xloc=xloc.bar_index, extend=extend.none, 
+                              color=c_tso, style=get_lst(s_tso), width=w_tso)
+    if show_tso_lbl
+        tso_nypm_label := label.new(bar_index + 2, nypm_price, "NY PM Open", 
+                                    xloc=xloc.bar_index, yloc=yloc.price, 
+                                    color=color.new(color.white, 100), textcolor=c_tso, 
+                                    style=label.style_label_left, size=size.small)
+
+// Update all TSO lines to extend only within their session boundaries
+if show_tso
+    // ASIA session: 18:00 - 00:00 (Q2 starts at 19:30)
+    if not na(tso_asia_line)
+        if ny_h >= 19 and ny_h < 24  // Within Asia session
+            line.set_x2(tso_asia_line, bar_index + 2)
+            if not na(tso_asia_label)
+                label.set_x(tso_asia_label, bar_index + 2)
+        else if ny_h == 0 and ny_m == 0  // Session ended, close line
+            line.set_x2(tso_asia_line, bar_index - 1)
+            if not na(tso_asia_label)
+                label.set_x(tso_asia_label, bar_index - 1)
+    
+    // LONDON session: 00:00 - 06:00 (Q2 starts at 01:30)
+    if not na(tso_london_line)
+        if ny_h >= 1 and ny_h < 6  // Within London session
+            line.set_x2(tso_london_line, bar_index + 2)
+            if not na(tso_london_label)
+                label.set_x(tso_london_label, bar_index + 2)
+        else if ny_h == 6 and ny_m == 0  // Session ended, close line
+            line.set_x2(tso_london_line, bar_index - 1)
+            if not na(tso_london_label)
+                label.set_x(tso_london_label, bar_index - 1)
+    
+    // NY AM session: 06:00 - 12:00 (Q2 starts at 07:30)
+    if not na(tso_nyam_line)
+        if ny_h >= 7 and ny_h < 12  // Within NY AM session
+            line.set_x2(tso_nyam_line, bar_index + 2)
+            if not na(tso_nyam_label)
+                label.set_x(tso_nyam_label, bar_index + 2)
+        else if ny_h == 12 and ny_m == 0  // Session ended, close line
+            line.set_x2(tso_nyam_line, bar_index - 1)
+            if not na(tso_nyam_label)
+                label.set_x(tso_nyam_label, bar_index - 1)
+    
+    // NY PM session: 12:00 - 18:00 (Q2 starts at 13:30)
+    if not na(tso_nypm_line)
+        if ny_h >= 13 and ny_h < 18  // Within NY PM session
+            line.set_x2(tso_nypm_line, bar_index + 2)
+            if not na(tso_nypm_label)
+                label.set_x(tso_nypm_label, bar_index + 2)
+        else if ny_h == 18 and ny_m == 0  // Session ended, close line
+            line.set_x2(tso_nypm_line, bar_index - 1)
+            if not na(tso_nypm_label)
+                label.set_x(tso_nypm_label, bar_index - 1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TMSO - TRUE MICRO SESSION OPEN (Q2 open of each 90min session)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+
+
+// TMSO - Q2 Open (Synchronized with Micro Quarters)
+// TMSO - Q2 Open (Synchronized with Micro Quarters)
+var line tmso_line = na
+var int tmso_prev_min = 9999
+var bool tmso_created = false
+var float tmso_price = na
+
+// Session ID logic (16 sessions per day of 90m)
+int tmso_mins_of_day = ny_h * 60 + ny_m
+int min_in_sess = tmso_mins_of_day % 90
+
+// 1. Session Wrap Detection (e.g. 89 -> 0)
+// This mechanically detects session change without risky ID math
+if min_in_sess < tmso_prev_min
+    // Close old line
+    if not na(tmso_line)
+        line.set_x2(tmso_line, bar_index - 1)
+    
+    // Reset state for new session
+    tmso_line := na
+    tmso_price := na
+    tmso_created := false // Enable creation for this new session
+
+// Update prev min for next bar
+tmso_prev_min := min_in_sess
+
+// 2. Check Creation Logic (>= 22.5 mins)
+// Trigger exactly ONCE per session when time threshold is met
+if min_in_sess >= 22.5 and not tmso_created and show_tmso and within_lookback
+    tmso_price := open
+    tmso_created := true // Lock creation
+    tmso_line := line.new(bar_index, tmso_price, bar_index + 2, tmso_price, 
+                          xloc=xloc.bar_index, extend=extend.none, 
+                          color=c_tmso, style=get_lst(s_tmso), width=w_tmso)
+
+// 3. Extend Line
+if not na(tmso_line) and show_tmso
+    line.set_x2(tmso_line, bar_index + 2)

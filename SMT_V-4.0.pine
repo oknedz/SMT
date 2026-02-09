@@ -87,8 +87,8 @@ contractSuffix = getContractSuffix(syminfo.ticker)
 autoSymbol1 = na(contractSuffix) ? na : "MES" + contractSuffix
 autoSymbol2 = na(contractSuffix) ? na : "MYM" + contractSuffix
 
-manualSymbol1 = input.symbol("MEXC:BTCUSDT.P", "Symbol 1", confirm=false, group="Comparison Symbols", inline="sym1")
-manualSymbol2 = input.symbol("ES1!", "Symbol 2", confirm=false, group="Comparison Symbols", inline="sym2")
+manualSymbol1 = input.symbol("CME_MINI:MES1!", "Symbol 1", confirm=false, group="Comparison Symbols", inline="sym1")
+manualSymbol2 = input.symbol("CBOT_MINI:MYM1!", "Symbol 2", confirm=false, group="Comparison Symbols", inline="sym2")
 
 symbol1 = autoDetectContracts and not na(autoSymbol1) ? autoSymbol1 : manualSymbol1
 symbol2 = autoDetectContracts and not na(autoSymbol2) ? autoSymbol2 : manualSymbol2
@@ -123,6 +123,7 @@ showLondonSession = input.bool(true, "Show London Session SMTs", group="Session 
 showNYSession = input.bool(true, "Show NY Session SMTs", group="Session SMT")
 showNYPMSession = input.bool(true, "Show NY PM Session SMTs", group="Session SMT")
 maxSessionSMTs = input.int(3, "Max Session SMTs per Session", minval=1, maxval=10, group="Session SMT")
+enableHistoryScan = input.bool(true, "Check All Previous Cycles (90m/30m)", tooltip="If enabled, current candle is compared against ALL previous completed cycles of the current day. If disabled, only compares against the immediately previous cycle.", group="Session SMT")
 
 maxTotalLines = input.int(4, "Max Total SMT Lines", minval=1, maxval=20, group="Display")
 enableOldSmtDeletion = input.bool(true, "Delete Old SMTs", group="Display")
@@ -133,17 +134,7 @@ bearishSmtColor = input.color(color.rgb(148, 43, 43), "Bearish SMT", group="Disp
 
 
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//                              ALERTS
-// ═══════════════════════════════════════════════════════════════════════════════
-enable90minAlerts = input.bool(true, "Enable 90-min SMT Alerts", group="Alerts")
-enable30minAlerts = input.bool(true, "Enable 30-min SMT Alerts", group="Alerts")
-enable90minInvalidationAlerts = input.bool(true, "Enable 90-min Invalidation Alerts", group="Alerts")
-enable30minInvalidationAlerts = input.bool(true, "Enable 30-min Invalidation Alerts", group="Alerts")
-enableDailyAlerts = input.bool(true, "Enable Daily SMT Alerts", group="Alerts")
-enableWeeklyAlerts = input.bool(true, "Enable Weekly SMT Alerts", group="Alerts")
-enableMonthlyAlerts = input.bool(true, "Enable Monthly SMT Alerts", group="Alerts")
-enableYearlyAlerts = input.bool(true, "Enable Yearly SMT Alerts", group="Alerts")
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              TYPE DEFINITIONS
@@ -165,8 +156,6 @@ type CycleData
     PivotPoint s2PivotHigh
     PivotPoint s2PivotLow
     bool active
-    bool alertedBearish
-    bool alertedBullish
 
 type CycleManager
     int duration
@@ -231,13 +220,7 @@ var line_style_3 = line.style_solid
 var bool s1Enabled = false
 var bool s2Enabled = false
 
-// Alert flags (reset each bar)
-string alert90minBearishSymbol = ""
-string alert90minBullishSymbol = ""
-string alert30minBearishSymbol = ""
-string alert30minBullishSymbol = ""
-string alert90minInvalidatedSymbol = ""
-string alert30minInvalidatedSymbol = ""
+
 
 // Optimization flag
 var array<bool> stateFlags = array.from(false)
@@ -259,7 +242,12 @@ getAbbr(sym) =>
     if str.contains(clean, "1!")
         clean := str.replace_all(clean, "1!", "")
         // For indices ending in 1!, take first 2-3 chars (ES, NQ, YM, etc)
-        str.substring(clean, 0, math.min(str.length(clean), 2))
+        // Check for Micros (MES, MNQ, MYM, M2K)
+        if str.length(clean) == 3 and str.startswith(clean, "M")
+            // Strip 'M' to show underlying asset (ES, NQ, YM)
+            str.substring(clean, 1, 3)
+        else
+            str.substring(clean, 0, math.min(str.length(clean), 3))
     else
         // Check for monthly contract codes (H, M, U, Z followed by year)
         // Examples: MESH2025, MYMH2025, MNQZ2024
@@ -388,35 +376,61 @@ getCycleId(int t, int duration) =>
     // Convert to minutes from midnight
     totalMins = h * 60 + m
     
-    // 02:30 NY = 2 * 60 + 30 = 150 minutes
-    startTimeMins = 150
+    // Dual Anchor Logic:
+    // Asia Session (18:00 - 00:00 NY): Anchor at 18:00 (1080 mins)
+    // Day Session (02:30 - 18:00 NY): Anchor at 02:30 (150 mins)
+    // Gap Period (00:00 - 02:30 NY): Start fresh, align to 00:00 or treat as Gap.
+    // However, the critical rule is NO OVERLAP at 02:30.
     
-    // Calculate cycle index (can be negative for pre-02:30 times, which is fine)
-    // This allows detection in Asia session (e.g. 18:00 onwards)
-    math.floor((totalMins - startTimeMins) / duration)
+    int anchorMins = 0
+    
+    // Day Session Block: 02:30 to 18:00
+    if totalMins >= 150 and totalMins < 1080
+        anchorMins := 150 // 02:30 Anchor
+    else
+        // Asia / Gap Block: 18:00 to 02:30 (starts at 1080)
+        anchorMins := 1080 // 18:00 Anchor
+        
+    // Calculate raw minutes from anchor
+    // If calculated mins is negative (e.g., 01:00 vs 18:00), we add 24h (1440m) to normalize
+    minsFromAnchor = totalMins - anchorMins
+    if minsFromAnchor < 0
+        minsFromAnchor := minsFromAnchor + 1440
+        
+    // Return Cycle ID
+    math.floor(minsFromAnchor / duration)
 
 
 //                              INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 initCycleData() =>
-    CycleData.new(na, na, createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), false, false, false)
+    CycleData.new(na, na, createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), createPivot(na, na, na), false)
 
 initDailySession(name, sessionTime, timezone, enabled) =>
     DailySession.new(name, sessionTime, timezone, enabled, initCycleData())
 
 
 if barstate.isfirst
-    array.push(managers, CycleManager.new(90, "90", enable90min, initCycleData(), array.new<CycleData>()))
-    array.push(managers, CycleManager.new(30, "30", enable30min, initCycleData(), array.new<CycleData>()))
-    array.push(managers, CycleManager.new(10, "10", enable10min, initCycleData(), array.new<CycleData>()))
-    array.push(managers, CycleManager.new(3, "3", enable3min, initCycleData(), array.new<CycleData>()))
+    // Intraday Cycles
+    if enable90min
+        array.push(managers, CycleManager.new(90, "90", true, initCycleData(), array.new<CycleData>()))
+    if enable30min
+        array.push(managers, CycleManager.new(30, "30", true, initCycleData(), array.new<CycleData>()))
+    if enable10min
+        array.push(managers, CycleManager.new(10, "10", true, initCycleData(), array.new<CycleData>()))
+    if enable3min and timeframe.in_seconds(timeframe.period) <= 60
+        array.push(managers, CycleManager.new(3, "3", true, initCycleData(), array.new<CycleData>()))
     
-    // Initialize Long Term Managers (Use -1, -2, -3, -4 for duration to signify Calendar cycles)
-    array.push(managers, CycleManager.new(-1, "D", enableDaily, initCycleData(), array.new<CycleData>()))
-    array.push(managers, CycleManager.new(-2, "W", enableWeekly, initCycleData(), array.new<CycleData>()))
-    array.push(managers, CycleManager.new(-3, "M", enableMonthly, initCycleData(), array.new<CycleData>()))
-    array.push(managers, CycleManager.new(-4, "Y", enableYearly, initCycleData(), array.new<CycleData>()))
+    // Calendar Cycles
+    if enableDaily
+        array.push(managers, CycleManager.new(-1, "D", true, initCycleData(), array.new<CycleData>()))
+    if enableWeekly
+        array.push(managers, CycleManager.new(-2, "W", true, initCycleData(), array.new<CycleData>()))
+    if enableMonthly
+        array.push(managers, CycleManager.new(-3, "M", true, initCycleData(), array.new<CycleData>()))
+    if enableYearly
+        array.push(managers, CycleManager.new(-4, "Y", true, initCycleData(), array.new<CycleData>()))
     
     // Initialize daily sessions - sequential progression
     array.push(dailySessions, initDailySession("ASIA", "1800-0230", "America/New_York", showAsiaSession))
@@ -449,8 +463,6 @@ startCycle(c) =>
     c.s2PivotHigh := createPivot(na, na, na)
     c.s2PivotLow := createPivot(na, na, na)
     c.active := true
-    c.alertedBearish := false
-    c.alertedBullish := false
 
 updatePivots(CycleData c) =>
     if c.active
@@ -508,45 +520,81 @@ markLinesAsHistorical(cycleLabel, cycleStartBar) =>
 repositionAllLabels() =>
     // Reposition all labels - combine labels that end on the same bar
     if array.size(lines) > 0
-        // Group lines by end bar and direction
-        processedKeys = array.new<string>()
+        // Use a boolean array to track which lines have been merged (hidden) in this pass
+        // This fixes the bug where labels remained hidden if they were hidden in a previous pass
+        merged = array.new_bool(array.size(lines), false)
         
         for i = 0 to array.size(lines) - 1
+            // If this line was already merged into another, skip it (label is already hidden)
+            if array.get(merged, i)
+                continue
+                
             meta = array.get(lines, i)
             
-            // Get line end coordinates
+            // Get line coordinates
+            x1 = line.get_x1(meta.lineObj)
+            y1 = line.get_y1(meta.lineObj)
             x2 = line.get_x2(meta.lineObj)
             y2 = line.get_y2(meta.lineObj)
             
-            // Create unique key for this bar + direction
-            barKey = str.tostring(x2) + "_" + str.tostring(meta.isBearish)
+            // Always start with the base symbol for this line
+            combinedText = meta.symbols
             
-            // Check if we already processed this bar+direction (skip if label already empty)
-            if label.get_text(meta.labelObj) == ""
-                continue
-            
-            // Find all lines ending at same bar with same direction+cycle
-            combinedText = ""
-            
-            // OPTIMIZED: Only scan forward if there are more elements
+            // Check for other lines that align with this one (Merge Logic)
             if i + 1 < array.size(lines)
                 for j = i + 1 to array.size(lines) - 1
-                    checkMeta = array.get(lines, j)
-                    checkX2 = line.get_x2(checkMeta.lineObj)
-                    
-                    if checkX2 == x2 and checkMeta.isBearish == meta.isBearish and meta.cycleLabel == checkMeta.cycleLabel
-                        combinedText := combinedText == "" ? checkMeta.symbols : combinedText + "+" + checkMeta.symbols
-                        label.set_text(checkMeta.labelObj, "")  // Hide duplicate
-            // Build and set label
-            if combinedText == ""
-                combinedText := meta.symbols
+                    if not array.get(merged, j)
+                        checkMeta = array.get(lines, j)
+                        checkX1 = line.get_x1(checkMeta.lineObj)
+                        checkX2 = line.get_x2(checkMeta.lineObj)
+                        
+                        // Merge if start/end points match, direction matches, and cycle matches
+                        if checkX1 == x1 and checkX2 == x2 and checkMeta.isBearish == meta.isBearish and meta.cycleLabel == checkMeta.cycleLabel
+                            combinedText := combinedText + "+" + checkMeta.symbols
+                            label.set_text(checkMeta.labelObj, "")  // Hide duplicate
+                            array.set(merged, j, true) // Mark logic as merged
+            
+            // Construct label text
             isSessionLabel = meta.cycleLabel == "ASIA" or meta.cycleLabel == "LONDON" or meta.cycleLabel == "NY-AM" or meta.cycleLabel == "NY-PM" or meta.cycleLabel == "D" or meta.cycleLabel == "W" or meta.cycleLabel == "M" or meta.cycleLabel == "Y"
             num369 = get369(x2)
             suffix369 = enable369Ids and num369 > 0 ? " (" + str.tostring(num369) + ")" : ""
             txt = isSessionLabel ? meta.cycleLabel + " " + combinedText + suffix369 : meta.cycleLabel + "m " + combinedText + suffix369
             label.set_text(meta.labelObj, txt)
-            totalOffset = meta.isBearish ? labelBaseOffset : -labelBaseOffset
-            label.set_xy(meta.labelObj, x2, y2 + totalOffset)
+            
+            // Calculate Stacking Position
+            // Count how many visible labels at this endpoint have a "lower priority" (should be closer to price)
+            // Or use the provided stacking logic: if existing > cycleOrder, stack + 1 (pushing this one out)
+            
+            cycleOrder = meta.cycleLabel == "Y" ? 0 : (meta.cycleLabel == "M" ? 1 : (meta.cycleLabel == "W" ? 2 : (meta.cycleLabel == "D" ? 3 : (meta.cycleLabel == "90" ? 4 : (meta.cycleLabel == "30" ? 5 : (meta.cycleLabel == "10" ? 6 : (meta.cycleLabel == "3" ? 7 : 8)))))))
+            
+            stackPosition = 0
+            
+            // Check against all other VISIBLE, SAME-DIRECTION lines at this endpoint
+            for j = 0 to array.size(lines) - 1
+                if i == j or array.get(merged, j)
+                    continue
+                
+                checkMeta = array.get(lines, j)
+                checkX2 = line.get_x2(checkMeta.lineObj)
+                
+                if checkX2 == x2 and checkMeta.isBearish == meta.isBearish
+                    existingOrder = checkMeta.cycleLabel == "Y" ? 0 : (checkMeta.cycleLabel == "M" ? 1 : (checkMeta.cycleLabel == "W" ? 2 : (checkMeta.cycleLabel == "D" ? 3 : (checkMeta.cycleLabel == "90" ? 4 : (checkMeta.cycleLabel == "30" ? 5 : (checkMeta.cycleLabel == "10" ? 6 : (checkMeta.cycleLabel == "3" ? 7 : 8)))))))
+                    
+                    // Match the stacking logic from drawSMT
+                    if existingOrder > cycleOrder
+                        stackPosition += 1
+                    // Stable sort for equal priority: if earlier in array, take precedence (push this one out)
+                    else if existingOrder == cycleOrder and j < i
+                        stackPosition += 1
+
+            stackOffset = stackPosition * labelStackSpacing
+            totalOffset = meta.isBearish ? (labelBaseOffset + stackOffset) : -(labelBaseOffset + stackOffset)
+            
+            // Calculate midpoint for centering
+            midX = math.floor((x1 + x2) / 2)
+            midY = (y1 + y2) / 2
+            
+            label.set_xy(meta.labelObj, midX, midY + totalOffset)
 
 completeCycle(m) =>
     // Mark existing lines for this cycle as historical BEFORE starting new cycle
@@ -701,9 +749,9 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
                 lineStyle = cycleLabel == "90" ? line_style_90 : (cycleLabel == "30" ? line_style_30 : (cycleLabel == "10" ? line_style_10 : (cycleLabel == "3" ? line_style_3 : line.style_solid)))
                 l = line.new(time1, price1, time2, price2, xloc=xloc.bar_time, color=lineColor, width=1, style=lineStyle)
                 
-                // Use right side of line (end point) for label placement
-                endTime = time2
-                endPrice = price2
+                // Calculate midpoint for label placement
+                midTime = math.floor((time1 + time2) / 2)
+                midPrice = (price1 + price2) / 2
                 
                 // Calculate stack position based on cycle priority: 90 > 30 > 10 > 3 > sessions
                 stackPosition = 0
@@ -729,13 +777,13 @@ drawSMT(bar1, time1, price1, bar2, time2, price2, symbolStr, cycleLabel, bearish
                 isSessionLabel = cycleLabel == "ASIA" or cycleLabel == "LONDON" or cycleLabel == "NY-AM" or cycleLabel == "NY-PM" or cycleLabel == "D" or cycleLabel == "W" or cycleLabel == "M" or cycleLabel == "Y"
                 
                 // Calculate 369 numerology for endpoint
-                num369 = get369(endTime)
+                num369 = get369(time2)
                 suffix369 = enable369Ids and num369 > 0 ? " (" + str.tostring(num369) + ")" : ""
                 
                 txt = isSessionLabel ? cycleLabel + " " + symbolStr + suffix369 : cycleLabel + "m " + symbolStr + suffix369
                 
-                // Create label at right side of line (end point) with vertical offset
-                lab = label.new(endTime, endPrice + totalOffset, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
+                // Create label at midpoint of line
+                lab = label.new(midTime, midPrice + totalOffset, txt, xloc=xloc.bar_time, style=label.style_none, color=textColor, textcolor=textColor, size=size.small, yloc=yloc.price)
                 
                 array.push(lines, LineMetadata.new(l, lab, bearish, newLen, typeId, price1, compPrice, symbolStr, cycleLabel, cycleStartBar, true))
                 
@@ -794,33 +842,29 @@ checkAndDrawSMT(PivotPoint currMain, PivotPoint prevMain, PivotPoint currComp, P
         if isBearish
             // Bearish Normal: Main Higher High, Comp Lower High
             if currMain.price > prevMain.price and currComp.price < prevComp.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 0, currComp.price, startBar, currentDay, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 0, prevComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
             // Bearish Inverse: Comp Higher High, Main Lower High
             if currComp.price > prevComp.price and currMain.price < prevMain.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 4, currComp.price, startBar, currentDay, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, true, typeBase + 4, prevComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
         else
             // Bullish Normal: Main Lower Low, Comp Higher Low
             if currMain.price < prevMain.price and currComp.price > prevComp.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 1, currComp.price, startBar, currentDay, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 1, prevComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
             // Bullish Inverse: Comp Lower Low, Main Higher Low
             if currComp.price < prevComp.price and currMain.price > prevMain.price
-                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 5, currComp.price, startBar, currentDay, reposition = false)
+                if drawSMT(prevMain.barIndex, prevMain.time, prevMain.price, currMain.barIndex, currMain.time, currMain.price, symStr, lbl, false, typeBase + 5, prevComp.price, startBar, currentDay, reposition = false)
                     array.set(stateFlags, 0, true)
                     detected := true
     detected
 
 
 checkInvalidation() =>
-    inv90 = ""
-    inv30 = ""
-    
-    
     // OPTIMIZATION: Early exit if no symbols enabled
     if s1Enabled or s2Enabled
         if array.size(lines) > 0
@@ -833,19 +877,29 @@ checkInvalidation() =>
                 enabled = isS1 ? s1Enabled : s2Enabled
                 
                 if enabled
+                    // Default to current bar values
                     currMain = isHigh ? high : low
                     currComp = isS1 ? (isHigh ? s1_high : s1_low) : (isHigh ? s2_high : s2_low)
                     
+                    // ROBUSTNESS FIX: Attempt to use Cycle Extremes if available
+                    // This catches cases where price spiked (invalidating SMT) and came back
+                    for mgrIdx = 0 to array.size(managers) - 1
+                        mgr = array.get(managers, mgrIdx)
+                        if mgr.label == m.cycleLabel and mgr.current.active
+                            // Found matching manager, use its accumulated extremes
+                            cMain = isHigh ? mgr.current.mainPivotHigh.price : mgr.current.mainPivotLow.price
+                            cComp = isS1 ? (isHigh ? mgr.current.s1PivotHigh.price : mgr.current.s1PivotLow.price) : (isHigh ? mgr.current.s2PivotHigh.price : mgr.current.s2PivotLow.price)
+                            
+                            // If cycle extremes are valid, use them as they represent the "widest" excursion
+                            if not na(cMain)
+                                currMain := cMain
+                            if not na(cComp)
+                                currComp := cComp
+                            break
+
                     if not na(currMain) and not na(currComp)
                         // Checks all SMTs (including 369s) for invalidation/sync
                         if isInvalidated(m, isS1, isHigh, m.isBearish, inverse, currMain, currComp)
-                            // Trigger invalidation alerts for current cycle SMTs
-                            if m.isForCurrentCycle
-                                direction = m.isBearish ? "Bearish" : "Bullish"
-                                if m.cycleLabel == "90" and enable90minInvalidationAlerts
-                                    inv90 := direction + " " + m.symbols
-                                else if m.cycleLabel == "30" and enable30minInvalidationAlerts
-                                    inv30 := direction + " " + m.symbols
                             array.push(toRemove, i)
             
             if array.size(toRemove) > 0
@@ -856,8 +910,6 @@ checkInvalidation() =>
                 // Reposition remaining labels after deletion
                 array.set(stateFlags, 0, true)
 
-    [inv90, inv30]
-
 
 
 updateExistingLines(m) =>
@@ -865,9 +917,9 @@ updateExistingLines(m) =>
     if array.size(lines) > 0 and curr.active
         for i = 0 to array.size(lines) - 1
             meta = array.get(lines, i)
-            // Check if this line is for current active cycle of this manager
-            // historyCycleStart should match the bar where current cycle started
-            if meta.isForCurrentCycle and meta.cycleLabel == m.label and meta.historyCycleStart >= curr.startBar
+            // ROBUSTNESS FIX: Remove strict startBar check. Rely on isForCurrentCycle and label match.
+            // This ensures active lines tracks price even if startBar accounting drifts slightly.
+            if meta.isForCurrentCycle and meta.cycleLabel == m.label
                 isS1 = meta.smtTypeId == 0 or meta.smtTypeId == 1 or meta.smtTypeId == 4 or meta.smtTypeId == 5
                 isHigh = meta.smtTypeId == 0 or meta.smtTypeId == 2 or meta.smtTypeId == 4 or meta.smtTypeId == 6
                 
@@ -878,6 +930,8 @@ updateExistingLines(m) =>
                     // Update the line endpoint to current cycle's extreme
                     if line.get_x2(meta.lineObj) != currPivot.time or line.get_y2(meta.lineObj) != currPivot.price
                         line.set_xy2(meta.lineObj, currPivot.time, currPivot.price)
+                        // Update Length
+                        meta.length := calcLen(line.get_x1(meta.lineObj), meta.mainPrice, currPivot.barIndex, currPivot.price)
                         // Trigger reposition to update label text (369 calculation) and position immediately
                         array.set(stateFlags, 0, true)
 
@@ -897,69 +951,11 @@ processSMT(m, int currentDay) =>
         bearishSmtDetected = false
         bullishSmtDetected = false
         
-        // INTRA-CYCLE DETECTION removed from here - now done in main execution loop before updateCyclePivots
-        
-        // INTER-CYCLE DETECTION (compare against completed cycles from current day only)
-        hasHistory = array.size(m.history) > 0
-        if hasHistory
-            // Compare current cycle against previous completed cycles FROM CURRENT DAY ONLY
-            // V-4.0 CHANGE: Only compare against the very last completed cycle (Previous Cycle Only)
-            startIdx = math.max(0, array.size(m.history) - 1)
-            
-            for prevIdx = startIdx to array.size(m.history) - 1
-                prev = array.get(m.history, prevIdx)
-                
-                // ONLY compare cycles from the current trading day (from 18:00 onwards)
-                // Calculate day ID for previous cycle using helper function
-                if not na(prev.startTime)
-                    prevDayId = getDayId(prev.startTime)
-                    
-                    // Skip if previous cycle is from a different trading day AND it is an Intraday cycle
-                    // Long Term cycles (D, W, M, Y) allow cross-day comparison by definition 
-                    isIntraday = m.label == "90" or m.label == "30" or m.label == "10" or m.label == "3"
-                    if isIntraday and prevDayId != currentDay
-                        continue
-                
-                // Pre-fetch all pivots once (renamed to avoid shadowing session globals)
-                currMainHigh = curr.mainPivotHigh
-                currMainLow = curr.mainPivotLow
-                cycPrevMainHigh = prev.mainPivotHigh
-                cycPrevMainLow = prev.mainPivotLow
-                currS1High = curr.s1PivotHigh
-                currS1Low = curr.s1PivotLow
-                cycPrevS1High = prev.s1PivotHigh
-                cycPrevS1Low = prev.s1PivotLow
-                currS2High = curr.s2PivotHigh
-                currS2Low = curr.s2PivotLow
-                cycPrevS2High = prev.s2PivotHigh
-                cycPrevS2Low = prev.s2PivotLow
-                
-                // Check Symbol 1 SMTs
-                if s1Enabled
-                    if checkAndDrawSMT(currMainHigh, cycPrevMainHigh, currS1High, cycPrevS1High, s1Abbr, m.label, curr.startBar, 0, true, currentDay)
-                        bearishSmtDetected := true
-                    if checkAndDrawSMT(currMainLow, cycPrevMainLow, currS1Low, cycPrevS1Low, s1Abbr, m.label, curr.startBar, 0, false, currentDay)
-                        bullishSmtDetected := true
-                
-                // Check Symbol 2 SMTs
-                if s2Enabled
-                    if checkAndDrawSMT(currMainHigh, cycPrevMainHigh, currS2High, cycPrevS2High, s2Abbr, m.label, curr.startBar, 2, true, currentDay)
-                        bearishSmtDetected := true
-                    if checkAndDrawSMT(currMainLow, cycPrevMainLow, currS2Low, cycPrevS2Low, s2Abbr, m.label, curr.startBar, 2, false, currentDay)
-                        bullishSmtDetected := true
-
-            
-            // Cleanup old cycles (keep more history for comparison)
-            while array.size(m.history) > 100
-                array.remove(m.history, 0)
-            
-            array.set(stateFlags, 0, true)
-
-
-            [bearishSmtDetected, bullishSmtDetected]
-        else
-            // No history - only intra-cycle detection active
-            [bearishSmtDetected, bullishSmtDetected]
+    // V-4.0 OPTIMIZATION:
+    // Inter-cycle detection is now handled in the main execution loop (lines 1146+)
+    // which includes 'anyHighChanged' / 'anyLowChanged' optimization.
+    // This function now just returns empty status to satisfy signature.
+    [false, false]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              SESSION SMT FUNCTIONS
@@ -1082,11 +1078,7 @@ if currentDay != lastDay and not na(lastDay)
 
 lastDay := currentDay
 
-[inv90_1, inv30_1] = checkInvalidation()
-if inv90_1 != ""
-    alert90minInvalidatedSymbol := inv90_1
-if inv30_1 != ""
-    alert30minInvalidatedSymbol := inv30_1
+checkInvalidation()
 
 // Reposition all labels on every bar to reflect input changes
 
@@ -1098,10 +1090,7 @@ if inSession()
     // OPTIMIZATION: Pre-cache enabled/active managers to reduce iterations
     for i = 0 to array.size(managers) - 1
         m = array.get(managers, i)
-        
-        // Skip disabled or invalid timeframe cycles early
-        if not m.enabled or (m.duration == 3 and timeframe.in_seconds(timeframe.period) > 60)
-            continue
+        // Managers array is now pre-filtered at init, so no need to check enabled/validity here
         
         curr = m.current
         
@@ -1129,11 +1118,7 @@ if inSession()
         
         // 4. INVALIDATION CHECK (only once per bar on first iteration)
         if i == 0
-            [inv90_2, inv30_2] = checkInvalidation()
-            if inv90_2 != ""
-                alert90minInvalidatedSymbol := inv90_2
-            if inv30_2 != ""
-                alert30minInvalidatedSymbol := inv30_2
+            checkInvalidation()
         
         // 5. CHANGE DETECTION - optimized
         anyHighChanged = curr.mainPivotHigh.price != prevMainHigh or curr.s1PivotHigh.price != prevS1High or curr.s2PivotHigh.price != prevS2High
@@ -1146,75 +1131,34 @@ if inSession()
         // 6. INTRA-CYCLE DETECTION - only if history exists and changes occurred
         if array.size(m.history) > 0 and (anyHighChanged or anyLowChanged)
             mLabel = m.label  // Cache label for alert conditions
-            lastCompleted = array.get(m.history, array.size(m.history) - 1)
             
-            if anyHighChanged and s1Enabled
-                if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s1PivotHigh, lastCompleted.s1PivotHigh, s1Abbr, mLabel, curr.startBar, 0, true, currentDay)
-                    if not curr.alertedBearish
-                        if mLabel == "90" and enable90minAlerts
-                            alert90minBearishSymbol := s1Abbr
-                        else if mLabel == "30" and enable30minAlerts
-                            alert30minBearishSymbol := s1Abbr
-                        else if mLabel == "D" and enableDailyAlerts
-                            alert("🔴 Daily Bearish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "W" and enableWeeklyAlerts
-                            alert("🔴 Weekly Bearish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "M" and enableMonthlyAlerts
-                            alert("🔴 Monthly Bearish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "Y" and enableYearlyAlerts
-                            alert("🔴 Yearly Bearish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        curr.alertedBearish := true
+            // LOGIC FOR HISTORY SCAN:
+            // If enableHistoryScan is TRUE and (90m or 30m), scan ALL previous cycles from today.
+            // Otherwise, scan ONLY the last completed cycle (index size-1).
+            scanAll = enableHistoryScan and (mLabel == "90" or mLabel == "30")
+            startIndex = scanAll ? 0 : array.size(m.history) - 1
             
-            if s2Enabled
-                if checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s2PivotHigh, lastCompleted.s2PivotHigh, s2Abbr, mLabel, curr.startBar, 2, true, currentDay)
-                    if not curr.alertedBearish
-                        if mLabel == "90" and enable90minAlerts
-                            alert90minBearishSymbol := alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr
-                        else if mLabel == "30" and enable30minAlerts
-                            alert30minBearishSymbol := alert30minBearishSymbol == "" ? s2Abbr : alert30minBearishSymbol + "+" + s2Abbr
-                        else if mLabel == "D" and enableDailyAlerts
-                            alert("🔴 Daily Bearish SMT Detected (" + (alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "W" and enableWeeklyAlerts
-                            alert("🔴 Weekly Bearish SMT Detected (" + (alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "M" and enableMonthlyAlerts
-                            alert("🔴 Monthly Bearish SMT Detected (" + (alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "Y" and enableYearlyAlerts
-                            alert("🔴 Yearly Bearish SMT Detected (" + (alert90minBearishSymbol == "" ? s2Abbr : alert90minBearishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        curr.alertedBearish := true
-            
-            if anyLowChanged and s1Enabled
-                if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s1PivotLow, lastCompleted.s1PivotLow, s1Abbr, mLabel, curr.startBar, 0, false, currentDay)
-                    if not curr.alertedBullish
-                        if mLabel == "90" and enable90minAlerts
-                            alert90minBullishSymbol := s1Abbr
-                        else if mLabel == "30" and enable30minAlerts
-                            alert30minBullishSymbol := s1Abbr
-                        else if mLabel == "D" and enableDailyAlerts
-                            alert("🟢 Daily Bullish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "W" and enableWeeklyAlerts
-                            alert("🟢 Weekly Bullish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "M" and enableMonthlyAlerts
-                            alert("🟢 Monthly Bullish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "Y" and enableYearlyAlerts
-                            alert("🟢 Yearly Bullish SMT Detected (" + s1Abbr + ")", alert.freq_once_per_bar_close)
-                        curr.alertedBullish := true
-            
-            if s2Enabled
-                if checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s2PivotLow, lastCompleted.s2PivotLow, s2Abbr, mLabel, curr.startBar, 2, false, currentDay)
-                    if not curr.alertedBullish
-                        if mLabel == "90" and enable90minAlerts
-                            alert90minBullishSymbol := alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr
-                        else if mLabel == "30" and enable30minAlerts
-                            alert30minBullishSymbol := alert30minBullishSymbol == "" ? s2Abbr : alert30minBullishSymbol + "+" + s2Abbr
-                        else if mLabel == "D" and enableDailyAlerts
-                            alert("🟢 Daily Bullish SMT Detected (" + (alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "W" and enableWeeklyAlerts
-                            alert("🟢 Weekly Bullish SMT Detected (" + (alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "M" and enableMonthlyAlerts
-                            alert("🟢 Monthly Bullish SMT Detected (" + (alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        else if mLabel == "Y" and enableYearlyAlerts
-                            alert("🟢 Yearly Bullish SMT Detected (" + (alert90minBullishSymbol == "" ? s2Abbr : alert90minBullishSymbol + "+" + s2Abbr) + ")", alert.freq_once_per_bar_close)
-                        curr.alertedBullish := true
+            for histIdx = startIndex to array.size(m.history) - 1
+                lastCompleted = array.get(m.history, histIdx)
+                
+                // If scanning all, ensure we only compare against cycles from CURRENT DAY
+                // (Optimized: Last cycle is always checked regardless, loop logic handles others)
+                if scanAll
+                    histDayId = getDayId(lastCompleted.startTime)
+                    if histDayId != currentDay
+                        continue
+
+                if anyHighChanged and s1Enabled
+                    checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s1PivotHigh, lastCompleted.s1PivotHigh, s1Abbr, mLabel, curr.startBar, 0, true, currentDay)
+                
+                if s2Enabled
+                    checkAndDrawSMT(curr.mainPivotHigh, lastCompleted.mainPivotHigh, curr.s2PivotHigh, lastCompleted.s2PivotHigh, s2Abbr, mLabel, curr.startBar, 2, true, currentDay)
+                
+                if anyLowChanged and s1Enabled
+                    checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s1PivotLow, lastCompleted.s1PivotLow, s1Abbr, mLabel, curr.startBar, 0, false, currentDay)
+                
+                if s2Enabled
+                    checkAndDrawSMT(curr.mainPivotLow, lastCompleted.mainPivotLow, curr.s2PivotLow, lastCompleted.s2PivotLow, s2Abbr, mLabel, curr.startBar, 2, false, currentDay)
 
     // 7. BATCH PROCESSING - moved outside manager loop for efficiency
     // Process SMT detection and line updates once per bar, not per manager
@@ -1263,25 +1207,3 @@ if array.get(stateFlags, 0)
     array.set(stateFlags, 0, false)
 
 
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//                              ALERT CONDITIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-if alert90minBearishSymbol != ""
-    alert("🔴 90-min Bearish SMT Detected (" + alert90minBearishSymbol + ")", alert.freq_once_per_bar_close)
-
-if alert90minBullishSymbol != ""
-    alert("🟢 90-min Bullish SMT Detected (" + alert90minBullishSymbol + ")", alert.freq_once_per_bar_close)
-
-if alert30minBearishSymbol != ""
-    alert("🔴 30-min Bearish SMT Detected (" + alert30minBearishSymbol + ")", alert.freq_once_per_bar_close)
-
-if alert30minBullishSymbol != ""
-    alert("🟢 30-min Bullish SMT Detected (" + alert30minBullishSymbol + ")", alert.freq_once_per_bar_close)
-
-if alert90minInvalidatedSymbol != ""
-    alert("❌ 90-min SMT Invalidated (" + alert90minInvalidatedSymbol + ")", alert.freq_once_per_bar_close)
-
-if alert30minInvalidatedSymbol != ""
-    alert("❌ 30-min SMT Invalidated (" + alert30minInvalidatedSymbol + ")", alert.freq_once_per_bar_close)

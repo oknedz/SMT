@@ -1,0 +1,448 @@
+//@version=6
+indicator("ICT Market Maker Buy/Sell Program [Time Aligned]", "MM Program [TOI]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//      ICT MARKET MAKER SERIES - BUY & SELL PROGRAMS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tracks 90m & 30m Cycles to identify Liquidity Sweeps.
+// Filters entries based on Time of Interest (TOI) windows (:45 - :15).
+// Identifies Market Maker Models: Buy Program vs Sell Program.
+
+// ─── SETTINGS ───
+grp_sim = "Comparison"
+// Symbol 1
+sym_comp_1_In = input.symbol("CME_MINI:MES1!", "Comparison Symbol 1", group=grp_sim)
+en_s1         = input.bool(true, "Enable Symbol 1", group=grp_sim)
+
+// Symbol 2
+sym_comp_2_In = input.symbol("CBOT_MINI:MYM1!", "Comparison Symbol 2", group=grp_sim)
+en_s2         = input.bool(true, "Enable Symbol 2", group=grp_sim)
+
+grp_cyc = "Ref Cycles"
+time_90 = input.bool(true, "Track 90min Liquidity", group=grp_cyc)
+time_30 = input.bool(true, "Track 30min Liquidity", group=grp_cyc)
+time_10 = input.bool(true, "Track 10min Liquidity", group=grp_cyc)
+time_3  = input.bool(true, "Track 3min Liquidity", group=grp_cyc)
+use_369 = input.bool(true, "Allow 369 Logic Validation", group=grp_cyc)
+
+grp_toi = "Time of Interest"
+show_toi = input.bool(true, "Highlight TOI (:45 - :15)", group=grp_toi)
+c_toi    = input.color(color.new(color.gray, 92), "TOI Color", group=grp_toi)
+
+grp_vis = "Visuals"
+c_buy    = input.color(color.new(color.green, 90), "Buy Program Active", group=grp_vis)
+c_sell   = input.color(color.new(color.red, 90), "Sell Program Active", group=grp_vis)
+c_wait   = input.color(color.new(color.orange, 90), "Pending Expansion (Wait)", group=grp_vis)
+lbl_size = input.string(size.small, "Label Size", options=[size.tiny, size.small, size.normal], group=grp_vis)
+
+// ─── DATA FETCHING ───
+// Request data for both symbols
+[s1_open, s1_high, s1_low, s1_close] = request.security(sym_comp_1_In, timeframe.period, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[s2_open, s2_high, s2_low, s2_close] = request.security(sym_comp_2_In, timeframe.period, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Process Symbol 1
+s1_h = s1_high
+s1_l = s1_low
+s1_c = s1_close
+
+// Process Symbol 2
+s2_h = s2_high
+s2_l = s2_low
+s2_c = s2_close
+
+
+// ─── TIME CALCULATIONS ───
+// Convert time to NY minutes for cycle sync
+ny_m_total = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+// Handle day rollover for total minutes (18:00 start = 1080)
+// The "Cycle Day" starts at 18:00.
+is_new_day = hour(time, "America/New_York") == 18 and minute(time, "America/New_York") == 0
+
+
+// ─── CYCLE TRACKER LOGIC ───
+// We need to track the High/Low of the *current* forming cycle, and save the *previous* finished cycle.
+// Cycle Anchors based on Time-Cycles V4: 18:00, 00:00, 02:30
+
+// Function to determine Cycle ID (for reset detection)
+get_cycle_id_90(m) =>
+    // Anchors: 18:00(1080), 00:00(0/1440), 02:30(150), 04:00(240)...
+    // We handle this by checking segments
+    id = 0
+    if m >= 1080 // 18:00 - 24:00 (Asia)
+        id := math.floor((m - 1080) / 90) + 100 // 100 series for Asia
+    else if m < 150 // 00:00 - 02:30 (Mid)
+        id := math.floor(m / 90) + 200 // 200 series for Midnight
+    else // 02:30 - 18:00 (NY)
+        id := math.floor((m - 150) / 90) + 300 // 300 series for NY
+    id
+
+get_cycle_id_30(m) =>
+    // Standard 30m intervals align easily, but we sync to the anchors just in case
+    // Actually standard 30m fits all anchors (18:00, 00:00, 02:30) perfectly.
+    // So distinct ID is just minute / 30
+    math.floor(m / 30)
+
+get_cycle_id_10(m) =>
+    math.floor(m / 10)
+
+get_cycle_id_3(m) =>
+    math.floor(m / 3)
+
+// ─ TYPE: CYCLE STATE ─
+type CycleState
+    float curr_h
+    float curr_l
+    float curr_o
+    float prev_h
+    float prev_l
+    float prev_o
+    int   curr_id
+
+// Initialize State
+var c90_m  = CycleState.new(na, na, na, na, na, na, -1) // Main Symbol 90m
+var c90_s1 = CycleState.new(na, na, na, na, na, na, -1)
+var c90_s2 = CycleState.new(na, na, na, na, na, na, -1)
+
+var c30_m  = CycleState.new(na, na, na, na, na, na, -1) // Main Symbol 30m
+var c30_s1 = CycleState.new(na, na, na, na, na, na, -1)
+var c30_s2 = CycleState.new(na, na, na, na, na, na, -1)
+
+var c10_m  = CycleState.new(na, na, na, na, na, na, -1) // Main Symbol 10m
+var c10_s1 = CycleState.new(na, na, na, na, na, na, -1)
+var c10_s2 = CycleState.new(na, na, na, na, na, na, -1)
+
+var c3_m   = CycleState.new(na, na, na, na, na, na, -1) // Main Symbol 3m
+var c3_s1  = CycleState.new(na, na, na, na, na, na, -1)
+var c3_s2  = CycleState.new(na, na, na, na, na, na, -1)
+
+// UPDATE FUNCTION
+update_cycle(CycleState cs, int new_id, float price_h, float price_l, float price_o) =>
+    if new_id != cs.curr_id
+        // NEW CYCLE STARTED -> Archive Current to Previous
+        cs.prev_h  := cs.curr_h
+        cs.prev_l  := cs.curr_l
+        cs.prev_o  := cs.curr_o
+        cs.curr_h  := price_h
+        cs.curr_l  := price_l
+        cs.curr_o  := price_o
+        cs.curr_id := new_id
+    else
+        // CONTINUE CYCLE -> Update Extremes
+        cs.curr_h := math.max(nz(cs.curr_h, -999999), price_h)
+        cs.curr_l := math.min(nz(cs.curr_l, 999999), price_l)
+
+// EXECUTE UPDATES
+id_90 = get_cycle_id_90(ny_m_total)
+id_30 = get_cycle_id_30(ny_m_total)
+id_10 = get_cycle_id_10(ny_m_total)
+id_3  = get_cycle_id_3(ny_m_total)
+
+if not na(high)
+    update_cycle(c90_m, id_90, high, low, open)
+    update_cycle(c30_m, id_30, high, low, open)
+    update_cycle(c10_m, id_10, high, low, open)
+    update_cycle(c3_m, id_3, high, low, open)
+if en_s1 and not na(s1_h)
+    update_cycle(c90_s1, id_90, s1_h, s1_l, s1_open)
+    update_cycle(c30_s1, id_30, s1_h, s1_l, s1_open)
+    update_cycle(c10_s1, id_10, s1_h, s1_l, s1_open)
+    update_cycle(c3_s1, id_3, s1_h, s1_l, s1_open)
+if en_s2 and not na(s2_h)
+    update_cycle(c90_s2, id_90, s2_h, s2_l, s2_open)
+    update_cycle(c30_s2, id_30, s2_h, s2_l, s2_open)
+    update_cycle(c10_s2, id_10, s2_h, s2_l, s2_open)
+    update_cycle(c3_s2, id_3, s2_h, s2_l, s2_open)
+
+
+// ─── SWEEP & SMT DETECTION ───
+// Logic: Price breaks Prev High/Low. 
+// SMT: Main breaks, At least one Pair does not.
+
+// 1. Check Sweeps (Main)
+sweep_90_h = time_90 and high > c90_m.prev_h and low[1] < c90_m.prev_h
+sweep_90_l = time_90 and low < c90_m.prev_l and high[1] > c90_m.prev_l
+
+sweep_30_h = time_30 and high > c30_m.prev_h and low[1] < c30_m.prev_h
+sweep_30_l = time_30 and low < c30_m.prev_l and high[1] > c30_m.prev_l
+
+sweep_10_h = time_10 and high > c10_m.prev_h and low[1] < c10_m.prev_h
+sweep_10_l = time_10 and low < c10_m.prev_l and high[1] > c10_m.prev_l
+
+sweep_3_h  = time_3 and high > c3_m.prev_h and low[1] < c3_m.prev_h
+sweep_3_l  = time_3 and low < c3_m.prev_l and high[1] > c3_m.prev_l
+
+
+// 2. Check Confirmation (Comparison) - SMT Logic
+// Function to check divergence against a symbol's cycle state
+check_bear_smt(bool enabled, float prev_h, float ref_h) =>
+    enabled and not na(prev_h) and ref_h < prev_h // Main broke High, This Sym failed
+
+check_bull_smt(bool enabled, float prev_l, float ref_l) =>
+    enabled and not na(prev_l) and ref_l > prev_l // Main broke Low, This Sym failed
+
+// 369 Logic (Simplistic check per user context, assuming timestamp sum or similar)
+// User mentioned "regular smt and smt 369" - assuming 369 is a specific time-based check on the sweep
+// We will use a basic digital root check on the detection time for now or just tag it
+f_root(n) => 
+    r = n % 9
+    r == 0 ? 9 : r
+t_root = f_root(minute(time) + hour(time))
+is_369 = t_root == 3 or t_root == 6 or t_root == 9
+
+// Consolidate: SMT is valid if Sweep + (S1 SMT OR S2 SMT OR 369 Logic)
+// If 369 is active, it validates the sweep// Evaluate against S1 and S2
+// 90m
+smt_bear_90 = sweep_90_h and (check_bear_smt(en_s1, c90_s1.prev_h, c90_s1.curr_h) or check_bear_smt(en_s2, c90_s2.prev_h, c90_s2.curr_h) or (use_369 and is_369))
+smt_bull_90 = sweep_90_l and (check_bull_smt(en_s1, c90_s1.prev_l, c90_s1.curr_l) or check_bull_smt(en_s2, c90_s2.prev_l, c90_s2.curr_l) or (use_369 and is_369))
+
+// 30m
+smt_bear_30 = sweep_30_h and (check_bear_smt(en_s1, c30_s1.prev_h, c30_s1.curr_h) or check_bear_smt(en_s2, c30_s2.prev_h, c30_s2.curr_h) or (use_369 and is_369))
+smt_bull_30 = sweep_30_l and (check_bull_smt(en_s1, c30_s1.prev_l, c30_s1.curr_l) or check_bull_smt(en_s2, c30_s2.prev_l, c30_s2.curr_l) or (use_369 and is_369))
+
+// 10m
+smt_bear_10 = sweep_10_h and (check_bear_smt(en_s1, c10_s1.prev_h, c10_s1.curr_h) or check_bear_smt(en_s2, c10_s2.prev_h, c10_s2.curr_h) or (use_369 and is_369))
+smt_bull_10 = sweep_10_l and (check_bull_smt(en_s1, c10_s1.prev_l, c10_s1.curr_l) or check_bull_smt(en_s2, c10_s2.prev_l, c10_s2.curr_l) or (use_369 and is_369))
+
+// 3m
+smt_bear_3 = sweep_3_h and (check_bear_smt(en_s1, c3_s1.prev_h, c3_s1.curr_h) or check_bear_smt(en_s2, c3_s2.prev_h, c3_s2.curr_h) or (use_369 and is_369))
+smt_bull_3 = sweep_3_l and (check_bull_smt(en_s1, c3_s1.prev_l, c3_s1.curr_l) or check_bull_smt(en_s2, c3_s2.prev_l, c3_s2.curr_l) or (use_369 and is_369))
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── SMR (SMART MONEY REVERSAL) ───
+// We need to identify a Market Structure Shift (MSS) *after* the sweep.
+// Structure: Breakdown of recent swing low (for Sell) or high (for Buy).
+
+// Track short term Swing Highs/Lows (Length 3 is standard for microstructure)
+sw_h = ta.pivothigh(high, 2, 1)
+sw_l = ta.pivotlow(low, 2, 1)
+
+// We need the *last confirmed* swing level BEFORE the current price action
+var float last_sw_h = na
+var float last_sw_l = na
+
+// Update Swings but keep them static until broken
+if not na(sw_h)
+    last_sw_h := sw_h
+if not na(sw_l)
+    last_sw_l := sw_l
+
+// STATE MACHINE for Program
+// 0=None, 1=Setup(Sweep), 2=Active(SMR)
+var int p_state = 0 
+var string p_type = "None" // "Buy", "Sell"
+var string p_mode = "None" // "Reversal", "Expansion"
+
+// DETECT STATE 1: SETUP (Liquidity Taken + SMT)
+// Liquidity Sweep happens -> We marked the "Setup"
+var bool setup_bull = false
+var bool setup_bear = false
+var float smr_level = na // The level needed to break
+var int setup_bar = 0
+
+// Trigger on any timeframe sweep
+if (smt_bull_90 or smt_bull_30 or smt_bull_10 or smt_bull_3)
+    setup_bull := true
+    setup_bear := false
+    smr_level := last_sw_h // We need to break the recent High
+    setup_bar := bar_index
+
+if (smt_bear_90 or smt_bear_30 or smt_bear_10 or smt_bear_3)
+    setup_bear := true
+    setup_bull := false
+    smr_level := last_sw_l // We need to break the recent Low
+    setup_bar := bar_index
+
+// DETECT STATE 2: SMR (Structure Shift)
+// Requires Setup to be Active. This is the "Gatekeeper".
+var bool prog_active = false
+var string prog_dir = "None"
+
+// Invalidation Logic: If price sweeps the OTHER side before SMR, the setup is void.
+if setup_bull and high > smr_level and low < last_sw_l 
+    na
+
+// ─── TARGET LOGIC ───
+var line target_line = na
+var label target_lbl = na
+var line oc_line = na
+var label oc_lbl = na
+
+if setup_bull and not prog_active
+    // Check for Break of Structure (Close > Swing High)
+    if close > smr_level
+        // SMR CONFIRMED
+        prog_active := true
+        prog_dir := "Buy"
+        setup_bull := false
+        // Check TOI at this exact moment
+        m = minute(time, "America/New_York")
+        in_toi = (m >= 45 or m <= 15)
+        p_mode := in_toi ? "Reversal" : "Expansion"
+        
+        // Define Target based on highest TF trigger
+        float t_p = na
+        float t_oc = na
+        string t_n = ""
+        if smt_bull_90 
+            t_p  := c90_m.prev_h
+            t_oc := c90_m.prev_o
+            t_n  := "90m"
+        else if smt_bull_30
+            t_p  := c30_m.prev_h
+            t_oc := c30_m.prev_o
+            t_n  := "30m"
+        else if smt_bull_10
+            t_p  := c10_m.prev_h
+            t_oc := c10_m.prev_o
+            t_n  := "10m"
+        else
+            t_p  := c3_m.prev_h
+            t_oc := c3_m.prev_o
+            t_n  := "3m"
+        
+        // Update Targets
+        line.delete(target_line)
+        label.delete(target_lbl)
+        line.delete(oc_line)
+        label.delete(oc_lbl)
+        
+        // Target 1: OC
+        oc_line := line.new(bar_index, t_oc, bar_index + 10, t_oc, color=color.blue, style=line.style_dotted)
+        oc_lbl  := label.new(bar_index + 10, t_oc, "🎯 T1 (OC)", xloc=xloc.bar_index, style=label.style_label_left, color=color.blue, textcolor=color.white, size=size.small)
+        
+        // Target 2: Liq
+        target_line := line.new(bar_index, t_p, bar_index + 10, t_p, color=c_buy, style=line.style_dashed)
+        target_lbl  := label.new(bar_index + 10, t_p, "🎯 T2 (Liq " + t_n + ")", xloc=xloc.bar_index, style=label.style_label_left, color=c_buy, textcolor=color.white, size=size.small)
+
+if setup_bear and not prog_active
+    if close < smr_level
+        // SMR CONFIRMED
+        prog_active := true
+        prog_dir := "Sell"
+        setup_bear := false
+        m = minute(time, "America/New_York")
+        in_toi = (m >= 45 or m <= 15)
+        p_mode := in_toi ? "Reversal" : "Expansion"
+        
+        // Define Target based on highest TF trigger
+        float t_p = na
+        float t_oc = na
+        string t_n = ""
+        if smt_bear_90 
+            t_p  := c90_m.prev_l
+            t_oc := c90_m.prev_o
+            t_n  := "90m"
+        else if smt_bear_30
+            t_p  := c30_m.prev_l
+            t_oc := c30_m.prev_o
+            t_n  := "30m"
+        else if smt_bear_10
+            t_p  := c10_m.prev_l
+            t_oc := c10_m.prev_o
+            t_n  := "10m"
+        else
+            t_p  := c3_m.prev_l
+            t_oc := c3_m.prev_o
+            t_n  := "3m"
+        
+        // Update Targets
+        line.delete(target_line)
+        label.delete(target_lbl)
+        line.delete(oc_line)
+        label.delete(oc_lbl)
+        
+        // Target 1: OC
+        oc_line := line.new(bar_index, t_oc, bar_index + 10, t_oc, color=color.blue, style=line.style_dotted)
+        oc_lbl  := label.new(bar_index + 10, t_oc, "🎯 T1 (OC)", xloc=xloc.bar_index, style=label.style_label_left, color=color.blue, textcolor=color.white, size=size.small)
+        
+        // Target 2: Liq
+        target_line := line.new(bar_index, t_p, bar_index + 10, t_p, color=c_sell, style=line.style_dashed)
+        target_lbl  := label.new(bar_index + 10, t_p, "🎯 T2 (Liq " + t_n + ")", xloc=xloc.bar_index, style=label.style_label_left, color=c_sell, textcolor=color.white, size=size.small)
+
+
+// ─── TOI LOGIC & VISUALS ───
+m_now = minute(time, "America/New_York")
+is_toi = (m_now >= 45 or m_now <= 15)
+
+// Reset Program if we hit a reversal sweep?
+if prog_active
+    // Move Target Labels
+    line.set_x1(target_line, bar_index)
+    line.set_x2(target_line, bar_index + 15)
+    label.set_x(target_lbl, bar_index + 15)
+    
+    line.set_x1(oc_line, bar_index)
+    line.set_x2(oc_line, bar_index + 15)
+    label.set_x(oc_lbl, bar_index + 15)
+    
+    // Check Reset
+    if prog_dir == "Buy" and (smt_bear_90 or smt_bear_30 or smt_bear_10 or smt_bear_3)
+        prog_active := false
+        prog_dir := "None"
+        p_mode := "None"
+        line.delete(target_line)
+        label.delete(target_lbl)
+        line.delete(oc_line)
+        label.delete(oc_lbl)
+    
+    if prog_dir == "Sell" and (smt_bull_90 or smt_bull_30 or smt_bull_10 or smt_bull_3)
+        prog_active := false
+        prog_dir := "None"
+        p_mode := "None"
+        line.delete(target_line)
+        label.delete(target_lbl)
+        line.delete(oc_line)
+        label.delete(oc_lbl)
+
+// Update Expansion Mode if TOI hits
+// Logic: If we are ACTIVE but in EXPANSION (Waiting), and Time Hits -> Switch to REVERSAL
+// This triggers the "Execution" phase.
+var bool toi_trigger = false
+if prog_active and p_mode == "Expansion" and is_toi
+    p_mode := "Reversal"
+    toi_trigger := true // Flag to show label only once per activation
+else
+    toi_trigger := false
+
+if toi_trigger
+    label.new(bar_index, high, "⏱️ TIME MEETS PRICE", style=label.style_label_down, color=color.blue, textcolor=color.white, size=size.small)
+
+// Backgrounds
+bg_col = color.new(color.gray, 100)
+if show_toi and is_toi
+    bg_col := c_toi // Generic TOI highlight
+
+if prog_active
+    if p_mode == "Reversal"
+        // Active Execution Mode
+        bg_col := prog_dir == "Buy" ? c_buy : c_sell
+    else
+        // Expansion (Wait) Mode
+        bg_col := c_wait
+
+bgcolor(bg_col)
+
+// Dashboard / Labels
+var table status_tbl = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    table.cell(status_tbl, 0, 0, "MM MODEL", bgcolor=color.gray, text_color=color.white)
+    table.cell(status_tbl, 1, 0, prog_active ? prog_dir + " Program" : "Scanning...", bgcolor=prog_active ? (prog_dir=="Buy"?color.green:color.red) : color.black, text_color=color.white)
+    
+    table.cell(status_tbl, 0, 1, "PROFILE", bgcolor=color.gray, text_color=color.white)
+    
+    status_txt = "None"
+    status_bg = color.black
+    if prog_active
+        if p_mode == "Reversal"
+            status_txt := "⚡ EXECUTE"
+            status_bg := color.green
+        else
+            status_txt := "⏳ WAIT (:45)"
+            status_bg := color.orange
+    
+    table.cell(status_tbl, 1, 1, status_txt, bgcolor=status_bg, text_color=color.white)
+    
+    table.cell(status_tbl, 0, 2, "TOI STATUS", bgcolor=color.gray, text_color=color.white)
+    table.cell(status_tbl, 1, 2, is_toi ? "OPEN" : "CLOSED", bgcolor=is_toi ? color.green : color.red, text_color=color.white)
+
