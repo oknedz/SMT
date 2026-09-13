@@ -1367,9 +1367,18 @@ isGbtMark(int h, int m) =>
             break
     [isMark, s, isNonGb]
 
-// Create a swing label, then trim oldest beyond cap (FIFO) to stay under the 500-label chart limit
-addSwingLabel(int barIdx, float price, string txt, color col) =>
-    lbl = label.new(barIdx, price, txt, xloc=xloc.bar_index, yloc=yloc.price,
+// Fixed pixel offsets from the bar's high/low (zoom-independent):
+// number label closest to the candle, dot stacked further out.
+LABEL_PX_NEAR = 3
+LABEL_PX_FAR = 28
+
+// Create a number label anchored to the bar: fixed pixel offset from
+// the high (above=true) or low (above=false). yloc.abovebar/belowbar keep
+// the label glued to the candle at a constant screen distance when zooming.
+// px = pixel offset. FIFO-trimmed to stay under the 500-label chart limit.
+addSwingLabel(int barIdx, string txt, color col, bool above, int px) =>
+    lbl = label.new(barIdx, px, txt, xloc=xloc.bar_index,
+      yloc=above ? yloc.abovebar : yloc.belowbar,
       color=color.new(color.black, 100), textcolor=col,
       style=label.style_none, size=size.small)
     array.push(swingLabels, lbl)
@@ -1381,9 +1390,6 @@ addSwingLabel(int barIdx, float price, string txt, color col) =>
 isSwingHighPattern = high[2] < high[1] and high[0] < high[1]
 isSwingLowPattern = low[2] > low[1] and low[0] > low[1]
 
-// Price offset for number placement relative to dot
-swingLabelOffset = (high - low) * 0.3
-
 // Detect and plot Swing High (strict GBT mark only)
 if enableSwingDetection and isSwingHighPattern and not na(time[1])
     swHour = hour(time[1], sessionTimezone)
@@ -1392,7 +1398,7 @@ if enableSwingDetection and isSwingHighPattern and not na(time[1])
     if swIsMark
         // GB number above swing high; "N" prefix for non-GB numbers
         labelTxt = swIsNonGb ? "N" + str.tostring(swGbNum) : str.tostring(swGbNum)
-        addSwingLabel(bar_index[1], high[1] + swingLabelOffset, labelTxt, bearishSmtColor)
+        addSwingLabel(bar_index[1], labelTxt, bearishSmtColor, true, LABEL_PX_NEAR)
 
 // Detect and plot Swing Low (strict GBT mark only)
 if enableSwingDetection and isSwingLowPattern and not na(time[1])
@@ -1402,7 +1408,7 @@ if enableSwingDetection and isSwingLowPattern and not na(time[1])
     if swIsMark
         // GB number below swing low; "N" prefix for non-GB numbers
         labelTxt = swIsNonGb ? "N" + str.tostring(swGbNum) : str.tostring(swGbNum)
-        addSwingLabel(bar_index[1], low[1] - swingLabelOffset, labelTxt, bullishSmtColor)
+        addSwingLabel(bar_index[1], labelTxt, bullishSmtColor, false, LABEL_PX_NEAR)
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1412,15 +1418,16 @@ if enableSwingDetection and isSwingLowPattern and not na(time[1])
 //  Compares the GB swing stamp of the middle candle across ALL symbols
 //  (main chart + enabled comparison symbols).
 //  A symbol "stamps" when it forms a 3-candle swing on a strict GBT mark.
-//  Discrepancy: some symbols stamped the GB swing while others did not.
-//  Draws a diamond above the stamped candle with the GB number (e.g. 11, N23).
+//  Single-candle SMT: tiny dot (plotshape circle) ONLY when symbols disagree
+//  on the stamp. Direction-aware: above a swing high, below a swing low,
+//  with the GB number label beside it (never overlaps).
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
 enableGbtCandleSmt = input.bool(false, "Enable GB Candle SMT", group="Candle GB SMT",
-  tooltip="Draw a diamond when symbols disagree on forming a 3-candle swing at a GBT-marked candle (one stamps, others don't).")
-gbtDiamondSize = input.string("Small", "Diamond Size", options=["Tiny", "Small"], group="Candle GB SMT", inline="gbtDmd")
-gbtDiamondColor = input.color(color.yellow, "Diamond Color", group="Candle GB SMT", inline="gbtDmd")
+  tooltip="Single-candle SMT: dot when symbols disagree on a GB swing stamp. Above swing highs, below swing lows, GB number inside.")
+gbtDiamondSize = input.string("Tiny", "Dot Size", options=["Tiny", "Small"], group="Candle GB SMT", inline="gbtDmd")
+gbtDiamondColor = input.color(color.yellow, "Dot Color", group="Candle GB SMT", inline="gbtDmd")
 
 // True when a timestamp falls on a strict GBT mark (session timezone)
 isGbTimestamp(int t) =>
@@ -1435,9 +1442,15 @@ s2SwingLow = s2_low[2] > s2_low[1] and s2_low[0] > s2_low[1]
 
 // Per-symbol GB swing stamp on the middle candle (bar[1]):
 // a 3-candle swing formed AND the stamped candle is on a strict GBT mark
-mainStamp = not na(time[1]) and isGbTimestamp(time[1]) and (isSwingHighPattern or isSwingLowPattern)
-s1Stamp = enableSymbol1 and not na(s1_bar_time[1]) and isGbTimestamp(s1_bar_time[1]) and (s1SwingHigh or s1SwingLow)
-s2Stamp = enableSymbol2 and not na(s2_bar_time[1]) and isGbTimestamp(s2_bar_time[1]) and (s2SwingHigh or s2SwingLow)
+mainStampHigh = not na(time[1]) and isGbTimestamp(time[1]) and isSwingHighPattern
+mainStampLow = not na(time[1]) and isGbTimestamp(time[1]) and isSwingLowPattern
+mainStamp = mainStampHigh or mainStampLow
+s1StampHigh = enableSymbol1 and not na(s1_bar_time[1]) and isGbTimestamp(s1_bar_time[1]) and s1SwingHigh
+s1StampLow = enableSymbol1 and not na(s1_bar_time[1]) and isGbTimestamp(s1_bar_time[1]) and s1SwingLow
+s2StampHigh = enableSymbol2 and not na(s2_bar_time[1]) and isGbTimestamp(s2_bar_time[1]) and s2SwingHigh
+s2StampLow = enableSymbol2 and not na(s2_bar_time[1]) and isGbTimestamp(s2_bar_time[1]) and s2SwingLow
+s1Stamp = s1StampHigh or s1StampLow
+s2Stamp = s2StampHigh or s2StampLow
 
 // Discrepancy: some symbols stamped the GB swing, some did not
 comparedCount = 1 + (enableSymbol1 ? 1 : 0) + (enableSymbol2 ? 1 : 0)
@@ -1445,18 +1458,31 @@ stampCount = (mainStamp ? 1 : 0) + (s1Stamp ? 1 : 0) + (s2Stamp ? 1 : 0)
 
 gbtCandleDivergence = enableGbtCandleSmt and stampCount > 0 and stampCount < comparedCount
 
-// plotshape size must be a const - split into two calls by chosen size
-// offset=-1 draws the diamond on the stamped candle (bar[1])
-plotshape(gbtCandleDivergence and gbtDiamondSize == "Tiny", title="GB Candle SMT", style=shape.diamond, location=location.abovebar,
+// Direction: follow the main chart's stamp; fall back to comparison stamps
+dirIsHigh = mainStampHigh or (not mainStampHigh and not mainStampLow and (s1StampHigh or s2StampHigh))
+dirIsLow = mainStampLow or (not mainStampHigh and not mainStampLow and (s1StampLow or s2StampLow) and not (s1StampHigh or s2StampHigh))
+
+// GB number of the stamped candle ("N" prefix for non-GB numbers)
+[dmdIsMark, dmdGbNum, dmdIsNonGb] = isGbtMark(hour(time[1], sessionTimezone), minute(time[1], sessionTimezone))
+dmdLabelTxt = dmdIsNonGb ? "N" + str.tostring(dmdGbNum) : str.tostring(dmdGbNum)
+
+// Tiny dot (plotshape circle - labels enforce a larger minimum size) for the
+// single-candle SMT discrepancy. Direction-aware: above a swing high, below
+// a swing low. plotshape size must be const, so split by direction+size.
+plotshape(gbtCandleDivergence and dirIsHigh and gbtDiamondSize == "Tiny", style=shape.circle, location=location.abovebar,
   color=gbtDiamondColor, size=size.tiny, offset=-1)
-plotshape(gbtCandleDivergence and gbtDiamondSize != "Tiny", title="GB Candle SMT", style=shape.diamond, location=location.abovebar,
+plotshape(gbtCandleDivergence and dirIsHigh and gbtDiamondSize != "Tiny", style=shape.circle, location=location.abovebar,
+  color=gbtDiamondColor, size=size.small, offset=-1)
+plotshape(gbtCandleDivergence and dirIsLow and gbtDiamondSize == "Tiny", style=shape.circle, location=location.belowbar,
+  color=gbtDiamondColor, size=size.tiny, offset=-1)
+plotshape(gbtCandleDivergence and dirIsLow and gbtDiamondSize != "Tiny", style=shape.circle, location=location.belowbar,
   color=gbtDiamondColor, size=size.small, offset=-1)
 
-// GB number visible above the diamond (reuses managed swing-label pool, FIFO-capped)
-if gbtCandleDivergence
-    [dmdIsMark, dmdGbNum, dmdIsNonGb] = isGbtMark(hour(time[1], sessionTimezone), minute(time[1], sessionTimezone))
-    dmdLabelTxt = dmdIsNonGb ? "N" + str.tostring(dmdGbNum) : str.tostring(dmdGbNum)
-    addSwingLabel(bar_index[1], high[1] + swingLabelOffset * 2, dmdLabelTxt, gbtDiamondColor)
+// GB number label beside the dot (plain text, pixel-anchored, never overlaps)
+if gbtCandleDivergence and dirIsHigh
+    addSwingLabel(bar_index[1], dmdLabelTxt, gbtDiamondColor, true, LABEL_PX_FAR)
+if gbtCandleDivergence and dirIsLow
+    addSwingLabel(bar_index[1], dmdLabelTxt, gbtDiamondColor, false, LABEL_PX_FAR)
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
